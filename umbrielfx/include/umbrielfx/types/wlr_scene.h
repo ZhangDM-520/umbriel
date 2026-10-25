@@ -171,6 +171,28 @@ struct wlr_scene {
   } WLR_PRIVATE;
 };
 
+/** Inputs of the scene surface geometry pipeline, snapshotted at the last
+ * reconfigure. Lets the expensive opaque/clip/color math be skipped when a
+ * commit changes none of them. */
+struct wlr_scene_surface_geom {
+  bool applied; // the scene buffer currently shows the results computed from these inputs
+  struct wlr_box clip;
+  double scale;
+  int width, height; // surface-local
+  int buffer_width, buffer_height;
+  enum wl_output_transform transform;
+  struct wlr_fbox src_box; // pre-clip buffer source box
+  enum wlr_color_encoding color_encoding;
+  enum wlr_color_range color_range;
+  pixman_region32_t opaque; // surface opaque region snapshot
+  // Scene buffer geometry as the last apply left it. Compared against the live
+  // buffer so an external writer of src_box or the dest size (the view layer's
+  // crop) misses the cache and heals on the next commit instead of being
+  // silently overwritten by a skipped apply.
+  struct wlr_fbox applied_src_box;
+  int applied_dest_width, applied_dest_height;
+};
+
 /** A scene-graph node displaying a single surface. */
 struct wlr_scene_surface {
   struct wlr_scene_buffer* buffer;
@@ -187,6 +209,8 @@ struct wlr_scene_surface {
     struct wl_listener frame_done;
     struct wl_listener surface_destroy;
     struct wl_listener surface_commit;
+
+    struct wlr_scene_surface_geom geom;
   } WLR_PRIVATE;
 };
 

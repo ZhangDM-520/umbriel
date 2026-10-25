@@ -377,13 +377,13 @@ void wlr_scene_surface_update_color(struct wlr_scene_surface* scene_surface) {
   wlr_scene_buffer_set_luminance_multiplier(scene_surface->buffer, state.luminance_multiplier);
 }
 
-static void surface_reconfigure(struct wlr_scene_surface* scene_surface) {
+// Applies the opaque/clip geometry derived from the surface state to the scene
+// buffer. Returns false when the clipped region is empty, in which case the
+// buffer has been dropped.
+static bool surface_apply_geometry(struct wlr_scene_surface* scene_surface, struct wlr_fbox src_box) {
   struct wlr_scene_buffer* scene_buffer = scene_surface->buffer;
   struct wlr_surface* surface = scene_surface->surface;
   struct wlr_surface_state* state = &surface->current;
-
-  struct wlr_fbox src_box;
-  wlr_surface_get_buffer_source_box(surface, &src_box);
 
   pixman_region32_t opaque;
   pixman_region32_init(&opaque);
@@ -428,20 +428,7 @@ static void surface_reconfigure(struct wlr_scene_surface* scene_surface) {
   if (width <= 0 || height <= 0) {
     wlr_scene_buffer_set_buffer(scene_buffer, NULL);
     pixman_region32_fini(&opaque);
-    return;
-  }
-
-  enum wlr_color_encoding color_encoding = WLR_COLOR_ENCODING_NONE;
-  enum wlr_color_range color_range = WLR_COLOR_RANGE_NONE;
-  const struct wlr_color_representation_v1_surface_state* color_repr =
-      wlr_color_representation_v1_get_surface_state(surface);
-  if (color_repr != NULL) {
-    if (color_repr->coefficients != 0) {
-      color_encoding = wlr_color_representation_v1_color_encoding_to_wlr(color_repr->coefficients);
-    }
-    if (color_repr->range != 0) {
-      color_range = wlr_color_representation_v1_color_range_to_wlr(color_repr->range);
-    }
+    return false;
   }
 
   int dest_width = width;
@@ -460,10 +447,101 @@ static void surface_reconfigure(struct wlr_scene_surface* scene_surface) {
   wlr_scene_buffer_set_source_box(scene_buffer, &src_box);
   wlr_scene_buffer_set_dest_size(scene_buffer, dest_width, dest_height);
   wlr_scene_buffer_set_transform(scene_buffer, state->transform);
+  pixman_region32_fini(&opaque);
+  return true;
+}
+
+// The geometry pipeline is a pure function of the snapshotted inputs; when a
+// commit changes none of them, the previously applied results are still current.
+// The live scene buffer is also compared against the geometry the last apply
+// wrote: the view layer's crop writes src_box and the dest size directly, so
+// without that check a skipped apply would leave a stale crop stuck. Any
+// external write misses the cache and heals on the next reconfigure.
+static bool surface_geom_matches(
+    struct wlr_scene_surface* scene_surface, const struct wlr_surface_state* state, const struct wlr_fbox* src_box,
+    enum wlr_color_encoding color_encoding, enum wlr_color_range color_range
+) {
+  struct wlr_scene_surface_geom* geom = &scene_surface->geom;
+  struct wlr_scene_buffer* scene_buffer = scene_surface->buffer;
+  return geom->applied
+      && wlr_box_equal(&geom->clip, &scene_surface->clip)
+      && geom->scale == scene_surface->scale
+      && geom->width == state->width
+      && geom->height == state->height
+      && geom->buffer_width == state->buffer_width
+      && geom->buffer_height == state->buffer_height
+      && geom->transform == state->transform
+      && wlr_fbox_equal(&geom->src_box, src_box)
+      && geom->color_encoding == color_encoding
+      && geom->color_range == color_range
+      && pixman_region32_equal(&geom->opaque, &scene_surface->surface->opaque_region)
+      && wlr_fbox_equal(&scene_buffer->src_box, &geom->applied_src_box)
+      && scene_buffer->dst_width == geom->applied_dest_width
+      && scene_buffer->dst_height == geom->applied_dest_height;
+}
+
+// Records the snapshotted inputs and the scene buffer geometry the apply just
+// wrote, so surface_geom_matches can detect external buffer writes. Only called
+// after surface_apply_geometry succeeded.
+static void surface_geom_snapshot(
+    struct wlr_scene_surface* scene_surface, const struct wlr_surface_state* state, const struct wlr_fbox* src_box,
+    enum wlr_color_encoding color_encoding, enum wlr_color_range color_range
+) {
+  struct wlr_scene_surface_geom* geom = &scene_surface->geom;
+  struct wlr_scene_buffer* scene_buffer = scene_surface->buffer;
+  geom->clip = scene_surface->clip;
+  geom->scale = scene_surface->scale;
+  geom->width = state->width;
+  geom->height = state->height;
+  geom->buffer_width = state->buffer_width;
+  geom->buffer_height = state->buffer_height;
+  geom->transform = state->transform;
+  geom->src_box = *src_box;
+  geom->color_encoding = color_encoding;
+  geom->color_range = color_range;
+  pixman_region32_copy(&geom->opaque, &scene_surface->surface->opaque_region);
+  geom->applied_src_box = scene_buffer->src_box;
+  geom->applied_dest_width = scene_buffer->dst_width;
+  geom->applied_dest_height = scene_buffer->dst_height;
+  geom->applied = true;
+}
+
+static void surface_reconfigure(struct wlr_scene_surface* scene_surface) {
+  struct wlr_scene_buffer* scene_buffer = scene_surface->buffer;
+  struct wlr_surface* surface = scene_surface->surface;
+  struct wlr_surface_state* state = &surface->current;
+
+  struct wlr_fbox src_box;
+  wlr_surface_get_buffer_source_box(surface, &src_box);
+
+  enum wlr_color_encoding color_encoding = WLR_COLOR_ENCODING_NONE;
+  enum wlr_color_range color_range = WLR_COLOR_RANGE_NONE;
+  const struct wlr_color_representation_v1_surface_state* color_repr =
+      wlr_color_representation_v1_get_surface_state(surface);
+  if (color_repr != NULL) {
+    if (color_repr->coefficients != 0) {
+      color_encoding = wlr_color_representation_v1_color_encoding_to_wlr(color_repr->coefficients);
+    }
+    if (color_repr->range != 0) {
+      color_range = wlr_color_representation_v1_color_range_to_wlr(color_repr->range);
+    }
+  }
+
+  bool geom_stale = !surface_geom_matches(scene_surface, state, &src_box, color_encoding, color_range);
+  if (geom_stale) {
+    if (!surface_apply_geometry(scene_surface, src_box)) {
+      // The buffer was dropped for an empty clipped region; nothing is applied
+      // until a later commit presents visible geometry again.
+      scene_surface->geom.applied = false;
+      return;
+    }
+    wlr_scene_buffer_set_color_encoding(scene_buffer, color_encoding);
+    wlr_scene_buffer_set_color_range(scene_buffer, color_range);
+    surface_geom_snapshot(scene_surface, state, &src_box, color_encoding, color_range);
+  }
+
   surface_update_opacity(scene_surface);
   wlr_scene_surface_update_color(scene_surface);
-  wlr_scene_buffer_set_color_encoding(scene_buffer, color_encoding);
-  wlr_scene_buffer_set_color_range(scene_buffer, color_range);
 
   scene_buffer_unmark_client_buffer(scene_buffer);
 
@@ -497,8 +575,6 @@ static void surface_reconfigure(struct wlr_scene_surface* scene_surface) {
   } else {
     wlr_scene_buffer_set_buffer(scene_buffer, NULL);
   }
-
-  pixman_region32_fini(&opaque);
 }
 
 static void handle_scene_surface_surface_commit(struct wl_listener* listener, void* data) {
@@ -533,6 +609,7 @@ static bool scene_buffer_point_accepts_input(struct wlr_scene_buffer* scene_buff
 static void surface_addon_destroy(struct wlr_addon* addon) {
   struct wlr_scene_surface* surface = wl_container_of(addon, surface, addon);
 
+  pixman_region32_fini(&surface->geom.opaque);
   scene_buffer_unmark_client_buffer(surface->buffer);
 
   wlr_addon_finish(&surface->addon);
@@ -576,6 +653,7 @@ struct wlr_scene_surface* wlr_scene_surface_create(struct wlr_scene_tree* parent
   surface->buffer = scene_buffer;
   surface->surface = wlr_surface;
   surface->scale = 1.0;
+  pixman_region32_init(&surface->geom.opaque);
   scene_buffer->point_accepts_input = scene_buffer_point_accepts_input;
 
   surface->outputs_update.notify = handle_scene_buffer_outputs_update;
