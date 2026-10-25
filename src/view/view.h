@@ -939,6 +939,8 @@ namespace umbriel {
     bool m_minimized = false;
     uint64_t m_minimizeSerial = 0;
     ViewEffects m_effects;
+    // The effect-registry generation this view last re-bound against (UINT64_MAX = never).
+    uint64_t m_effectSyncGeneration = UINT64_MAX;
     ViewPresentation m_presentation;
     DragPhysics m_dragPhysics;
     double m_dragPhysicsMsec = 0; // animation clock at the sheet's last tick

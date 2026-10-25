@@ -212,6 +212,7 @@ namespace umbriel {
       m_workspace->tabs().memberChanged(this);
     }
     m_server->scheduleIpcWindowsEvent();
+    syncAnimationEffects();
   }
 
   void View::applyCornerRadius() {
@@ -324,6 +325,9 @@ namespace umbriel {
     applyCornerRadius();
     updateBlur();
     updateShadow();
+    // The border effect gate reads decorated(); refresh it even when no
+    // animation is progressing.
+    syncAnimationEffects();
   }
 
   void View::updateBorderGeometry() {

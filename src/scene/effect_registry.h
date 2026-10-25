@@ -65,6 +65,9 @@ namespace umbriel {
     ) const;
 
     [[nodiscard]] bool active() const { return m_ledger.active() > 0; }
+    // Bumped when the registry's shape changes (prepare, clear, suspend, or
+    // gaining/losing the last active instance) so a settled view knows to re-bind.
+    [[nodiscard]] uint64_t generation() const { return m_generation; }
     // Prepared programs and retained snapshots both keep rendering requirements alive.
     [[nodiscard]] bool persistentReferenced() const { return m_persistentReferenced || m_retainedPersistent > 0; }
     [[nodiscard]] bool inPlaceReferenced() const { return m_inPlaceReferenced || m_retainedInPlace > 0; }
@@ -118,6 +121,7 @@ namespace umbriel {
     EffectLedger m_ledger;
     EffectAudio m_audio{}; // bands and availability
     mutable uint64_t m_clockEpochMsec = 0;
+    uint64_t m_generation = 0;
     mutable bool m_clockEpochSet = false;
   };
 
