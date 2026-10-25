@@ -452,7 +452,12 @@ namespace umbriel {
     }
   }
 
-  void View::endDragPhysics() { m_dragPhysics.release(); }
+  void View::endDragPhysics() {
+    m_dragPhysics.release();
+    // The spring keeps displacing the sheet past the release; arm the resting
+    // re-home's deferral (consumed in setSceneParent).
+    m_releaseRehomeArmed = true;
+  }
 
   void View::restoreHomePresentation() {
     // The drag derived its own presented size and crop; drop them so the
@@ -940,7 +945,7 @@ namespace umbriel {
       m_decoration.setBorderRawColor(m_borderColorAnim.current(), effectiveOpacity());
       active = active || m_borderColorAnim.animating();
     }
-    if (m_dragPhysics.active() || m_dragPhysics.grabbed()) {
+    if (dragSheetDisplaced()) {
       if (effectRegistry().deformationShader() == nullptr) {
         // Without the program (physics turned off), the window stays rigid for the rest of the drag.
         m_dragPhysics = DragPhysics{};
@@ -955,6 +960,20 @@ namespace umbriel {
         const double cadenceS = refreshMhz > 0 ? 1000.0 / refreshMhz : 0.0;
         active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
       }
+    }
+    // The deferred resting re-home lands in the same tick the spring settles —
+    // a later tick may never come — or earlier while an overview is open and
+    // its cards need the home tree. The first tick also closes the release
+    // flow's deferral window: from here on, state changes reparent immediately.
+    // The wait is cleared BEFORE the call so the guard cannot absorb its own
+    // apply while the sheet is still displaced.
+    m_releaseRehomeArmed = false;
+    if (m_pendingHomeParent != nullptr
+        && (!dragSheetDisplaced() || (m_server->overview() != nullptr && m_server->overview()->active()))) {
+      wlr_scene_tree* target = m_pendingHomeParent;
+      m_pendingHomeParent = nullptr;
+      m_releaseRehomeArmed = false;
+      setSceneParent(target);
     }
     syncAnimationEffects();
     if (!active && m_mapped && m_xsurface != nullptr) {
