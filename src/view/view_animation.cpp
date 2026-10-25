@@ -36,8 +36,14 @@ namespace umbriel {
   void View::cancelPositionAnimation() {
     // Freeze wherever the node currently sits; callers use this to take over
     // positioning (drags, layout snaps) without a jump.
+    const bool wasAnimating = m_posX.animating() || m_posY.animating();
     m_posX.snap(layoutX());
     m_posY.snap(layoutY());
+    // A snapped tween stops reporting progress; re-sync so the tick's gate
+    // cannot leave the windows_move binding frozen at its last partial travel.
+    if (wasAnimating) {
+      syncAnimationEffects();
+    }
   }
 
   bool View::fadeComposited() const {
@@ -120,9 +126,15 @@ namespace umbriel {
   }
 
   void View::cancelFadeAnimation() {
+    const bool wasAnimating = m_fade.animating();
     m_fade.snap(1.0);
     setFadeAlpha(1.0F);
     releaseOpeningPresentation();
+    // A snapped fade stops reporting progress; re-sync so the tick's gate
+    // cannot leave the in-flight fade binding frozen at its last partial progress.
+    if (wasAnimating) {
+      syncAnimationEffects();
+    }
   }
 
   bool View::openingAnimationActive() const {
@@ -374,6 +386,7 @@ namespace umbriel {
     const wlr_box content = committedContentBox();
     m_presentation.setRegion(content.width, content.height);
     finishSizeAnimation();
+    syncAnimationEffects();
   }
 
   bool View::sizeGrabActive() const {
@@ -578,9 +591,13 @@ namespace umbriel {
     const auto& animation = config().animation;
     const auto& resize = animation.windowsResize;
     if (!animation.enabled || !resize.enabled) {
+      const bool wasAnimating = m_presentation.animating();
       m_presentation.setSize(width, height);
       m_presentation.setRegion(width, height);
       applyPresentedSize();
+      if (wasAnimating) {
+        syncAnimationEffects();
+      }
       return;
     }
     m_presentation.animateTo(width, height, resize.durationMs, resize.curve);
@@ -596,9 +613,13 @@ namespace umbriel {
 
   void View::setLayoutTarget(int x, int y) {
     const bool changed = layoutTargetX() != x || layoutTargetY() != y;
+    const bool wasAnimating = m_posX.animating() || m_posY.animating();
     m_posX.snap(x);
     m_posY.snap(y);
     m_positioned = true;
+    if (wasAnimating) {
+      syncAnimationEffects();
+    }
     if (m_mapped && !m_tiled && changed) {
       m_server->scheduleIpcWindowsEvent();
     }
@@ -788,8 +809,12 @@ namespace umbriel {
     const int fromX = layoutX();
     const int fromY = layoutY();
     if (fromX == x && fromY == y) {
+      const bool wasAnimating = m_posX.animating() || m_posY.animating();
       m_posX.snap(x);
       m_posY.snap(y);
+      if (wasAnimating) {
+        syncAnimationEffects();
+      }
       return;
     }
     const auto& animation = config().animation;
@@ -829,6 +854,7 @@ namespace umbriel {
       wlr_scene_node_clear_animations(&target->node);
       if (ownTrees) {
         m_dragSlotBound = false;
+        m_effectSyncGeneration = effectRegistry().generation();
       }
       if (border != nullptr) {
         wlr_scene_node_clear_animations(border);
@@ -907,11 +933,20 @@ namespace umbriel {
           .outputBox = output != nullptr ? output->layoutBox() : wlr_box{},
       });
     }
+    if (ownTrees) {
+      // tickAnimations skips re-syncs while the registry generation stands
+      // still; record what this sync actually applied so a direct mutator's
+      // sync is not repeated on the next tick.
+      m_effectSyncGeneration = effectRegistry().generation();
+    }
   }
 
   bool View::tickAnimations(double nowMsec) {
     bool active = false;
     bool openingFinished = false;
+    // Did anything move this frame? Effect bindings carry a copy of each
+    // animation's progress, so only progressing state needs a re-sync.
+    bool progressed = false;
 
     // Disable sibling size animations during a tiled resize, so they do not
     // trail the pointer while clients acknowledge successive configures.
@@ -925,6 +960,7 @@ namespace umbriel {
 
     const bool movedX = m_posX.tick(nowMsec);
     const bool movedY = m_posY.tick(nowMsec);
+    progressed = movedX || movedY;
     // A carried-speed spring settles on its own solver; stop it once no pixel can change.
     static_cast<void>(m_posX.finishSpringTail(1.0));
     static_cast<void>(m_posY.finishSpringTail(1.0));
@@ -942,6 +978,7 @@ namespace umbriel {
     }
 
     if (m_presentation.tick(nowMsec)) {
+      progressed = true;
       applyPresentedSize();
       if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
         overview->onViewPresentationChanged(this);
@@ -956,6 +993,7 @@ namespace umbriel {
     }
 
     if (m_fade.tick(nowMsec)) {
+      progressed = true;
       m_customFade = m_customFade
           && m_fade.animating()
           && effectRegistry().animationEffect(m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn)
@@ -1003,12 +1041,14 @@ namespace umbriel {
       openingFinished = m_mapped && !m_inScratchpad && !m_fade.animating() && m_fade.target() > m_fade.from();
     }
     if (m_focusDim.tick(nowMsec)) {
+      progressed = true;
       setFadeAlpha(m_fadeAlpha);
       active = active || m_focusDim.animating();
     }
     const bool opacityChanged = m_ruleOpacity.tick(nowMsec);
     const bool blurChanged = m_ruleBlur.tick(nowMsec);
     if (opacityChanged || blurChanged) {
+      progressed = true;
       setFadeAlpha(m_fadeAlpha);
       m_presentation.setFullscreenOpaque(fullscreenOpaque());
       updateBlur();
@@ -1018,6 +1058,7 @@ namespace umbriel {
       active = active || m_ruleOpacity.animating() || m_ruleBlur.animating();
     }
     if (m_modalShadeAlpha.tick(nowMsec)) {
+      progressed = true;
       syncModalShade();
       active = active || m_modalShadeAlpha.animating();
     }
@@ -1025,6 +1066,7 @@ namespace umbriel {
     const bool innerChanged = m_borderColorAnim.tick(nowMsec);
     const bool outerChanged = m_outerBorderColorAnim.tick(nowMsec);
     if (innerChanged || outerChanged) {
+      progressed = true;
       applyBorderColors();
       active = active || m_borderColorAnim.animating() || m_outerBorderColorAnim.animating();
     }
@@ -1042,13 +1084,27 @@ namespace umbriel {
         const int refreshMhz = output != nullptr ? output->wlr()->refresh : 0;
         const double cadenceS = refreshMhz > 0 ? 1000.0 / refreshMhz : 0.0;
         active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
+        progressed = true;
       }
     }
     if (openingFinished) {
       releaseOpeningPresentation(true);
       active = hasActiveAnimations() || active;
+      // The release re-adopts the client size and drops the opening inset;
+      // refresh the bindings even though no tween reported progress.
+      progressed = true;
     }
-    syncAnimationEffects();
+    // A bound drag slot, live layout motion, an unmapped view, persistent
+    // effects (whose apply carries the clock), or a registry move re-syncs
+    // every pass until settled.
+    if (progressed
+        || m_dragSlotBound
+        || m_layoutMotion
+        || !m_mapped
+        || m_effects.configured()
+        || m_effectSyncGeneration != effectRegistry().generation()) {
+      syncAnimationEffects();
+    }
     if (!active && m_mapped && m_xsurface != nullptr) {
       syncXwaylandConfigure();
     }
