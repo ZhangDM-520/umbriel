@@ -184,4 +184,18 @@ UMBRIEL_TEST(primarySelectorFollowsIdentityAndLayoutMembership) {
   CHECK_EQ(outputs.primaryOutput("missing").value_or("unmanaged"), "");
 }
 
+UMBRIEL_TEST(nativeScreenPublishesTheRenderScale) {
+  Fixture fixture;
+  CHECK(fixture.setUp(kMixedScales));
+  // A render scale beyond the logical one: X11 clients supersample like Wayland clients.
+  const umbriel::XwaylandOutputs outputs(fixture.display, fixture.layout, true, [](const wlr_output* output) {
+    return static_cast<double>(output->scale) * 2.0;
+  });
+
+  const umbriel::XwaylandRegion main = outputs.region(fixture.outputs[0], 0, 0);
+  CHECK_EQ(main.scale, 2.5);
+  CHECK_EQ(main.toXWidth(1000), 2500);
+  CHECK_EQ(main.toLayoutWidth(2500), 1000);
+}
+
 int main() { return RUN_TESTS(); }

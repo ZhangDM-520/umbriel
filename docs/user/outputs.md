@@ -36,6 +36,7 @@ Umbriel first uses the first remaining enabled output in its internal output ord
 | `mode`                                     | string                            | preferred    | Resolution and optional refresh rate, such as `"2560x1440@165"`.                                |
 | `position`                                 | `[x, y]`                          | automatic    | Top-left position in logical coordinates.                                                       |
 | `scale`                                    | float                             | `1.0`        | Output scale from 0.25 to 4.0.                                                                  |
+| `render_scale`                             | float                             | unset        | Scale clients render at (0.25 to 4.0); unset follows `scale`. The compositor samples down to `scale`. |
 | `transform`                                | string                            | `"normal"`   | Rotation or reflection.                                                                         |
 | `vrr`                                      | string                            | `"disabled"` | Variable refresh rate policy.                                                                   |
 | `tearing`                                  | bool                              | `false`      | Allow eligible fullscreen windows to use asynchronous page flips.                               |
@@ -111,6 +112,14 @@ screen_effect = "off"
 Positions use logical coordinates after scale and transform. A `3840x2160` output at scale `1.25` occupies `3072x1728` logical units. An output immediately to its right therefore starts at x = 3072.
 
 Omit `position` to place outputs automatically from left to right. Explicitly positioned outputs must touch or overlap for the pointer to move between them.
+
+### Supersampling with `render_scale`
+
+`render_scale` separates what things look like from what clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
+
+Applications that ignore the scale hints render as they always have. Values below `scale` are honored but undersample, which looks blurry. While `render_scale` differs from `scale`, fullscreen buffers no longer qualify for [direct scanout](#direct-scanout); set `render_scale` equal to `scale` for scanout-sensitive games.
+
+Larger client buffers cost memory and sampling work: at `render_scale = 2.0` with `scale = 1.35` they hold about 2.2 times as many pixels as at `scale` alone, growing with the square of the ratio. Prefer whole or half-integer values for crisp buffer ratios.
 
 ### Transform values
 

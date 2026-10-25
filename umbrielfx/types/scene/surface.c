@@ -17,12 +17,16 @@
 #include <wlr/util/region.h>
 #include <wlr/util/transform.h>
 
-static double get_surface_preferred_buffer_scale(struct wlr_surface* surface) {
+static double get_surface_preferred_buffer_scale(struct wlr_scene* scene, struct wlr_surface* surface) {
   double scale = 1;
   struct wlr_surface_output* surface_output;
   wl_list_for_each(surface_output, &surface->current_outputs, link) {
-    if (surface_output->output->scale > scale) {
-      scale = surface_output->output->scale;
+    double outputScale = surface_output->output->scale;
+    if (scene->preferred_scale_provider != NULL) {
+      outputScale = scene->preferred_scale_provider(surface_output->output, scene->preferred_scale_provider_data);
+    }
+    if (outputScale > scale) {
+      scale = outputScale;
     }
   }
   return scale;
@@ -144,7 +148,7 @@ static void handle_scene_buffer_outputs_update(struct wl_listener* listener, voi
     wlr_surface_send_enter(surface->surface, event->active[i]->output);
   }
 
-  double scale = get_surface_preferred_buffer_scale(surface->surface);
+  double scale = get_surface_preferred_buffer_scale(scene, surface->surface);
   wlr_fractional_scale_v1_notify_scale(surface->surface, scale);
   wlr_surface_set_preferred_buffer_scale(surface->surface, ceil(scale));
 

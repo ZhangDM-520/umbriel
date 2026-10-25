@@ -755,6 +755,39 @@ center_focused = true
   CHECK(!store.config().outputs[0].layout.scrolling.defaultExtentFraction.has_value());
 }
 
+UMBRIEL_TEST(outputRenderScaleIsHonoredWarnedAndClamped) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(R"(
+[output.DP-1]
+scale = 1.5
+render_scale = 2.0
+
+[output.HDMI-1]
+scale = 1.5
+render_scale = 1.0
+)");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs.size(), size_t{2});
+  CHECK(store.config().outputs[0].renderScale.has_value());
+  CHECK_EQ(*store.config().outputs[0].renderScale, 2.0);
+  CHECK(store.config().outputs[1].renderScale.has_value());
+  CHECK_EQ(*store.config().outputs[1].renderScale, 1.0);
+  CHECK(containsDiagnostic(store, "output.HDMI-1.render_scale"));
+  CHECK(containsDiagnostic(store, "undersamples"));
+
+  file.write("[output.DP-1]\nscale = 1.5\nrender_scale = 9.0\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(*store.config().outputs[0].renderScale, 4.0);
+  CHECK(containsDiagnostic(store, "output.DP-1.render_scale = 9"));
+
+  file.write("[output.DP-1]\nscale = 1.5\n");
+  CHECK(store.reload().success);
+  CHECK(!store.config().outputs[0].renderScale.has_value());
+}
+
 UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
