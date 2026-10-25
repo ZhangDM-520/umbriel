@@ -700,7 +700,8 @@ namespace umbriel {
         [](wlr_output* output, void* data) -> double {
           auto* server = static_cast<Server*>(data);
           const Output* bound = server->outputFromWlr(output);
-          return bound != nullptr ? bound->clientRenderScale() : static_cast<double>(output->scale);
+          // Unbound outputs are capture mirrors and must not drive hints.
+          return bound != nullptr ? bound->clientRenderScale() : -1.0;
         },
         this
     );

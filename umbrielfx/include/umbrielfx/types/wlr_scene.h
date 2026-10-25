@@ -592,7 +592,9 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
 /**
  * Overrides the preferred client scale derived when a surface's outputs
  * change. `get` answers with the scale clients should render at for the given
- * output; NULL restores the outputs' own scales.
+ * output; answers of 0 or below exclude that output from the derivation. A
+ * scene without a provider is a render-only mirror: it keeps output membership
+ * for frame pacing but publishes no scale hints to its surfaces' clients.
  */
 void wlr_scene_set_preferred_scale_provider(
     struct wlr_scene* scene, double (*get)(struct wlr_output* output, void* data), void* data

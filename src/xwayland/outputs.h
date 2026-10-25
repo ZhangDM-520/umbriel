@@ -50,7 +50,7 @@ namespace umbriel {
     // The scale X11 clients are asked to render each output at — its render
     // scale, resolved through the shell's output binding.
     using RenderScale = std::function<double(const wlr_output*)>;
-    // Empty `renderScale` publishes each output's logical scale (pre-supersampling behavior).
+    // Empty `renderScale` publishes each output's own scale.
     XwaylandOutputs(
         wl_display* display, wlr_output_layout* layout, bool nativeResolution, RenderScale renderScale = {}
     );

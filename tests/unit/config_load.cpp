@@ -783,9 +783,17 @@ render_scale = 1.0
   CHECK_EQ(*store.config().outputs[0].renderScale, 4.0);
   CHECK(containsDiagnostic(store, "output.DP-1.render_scale = 9"));
 
+  // Without `scale`, the warn compares against the documented default: an
+  // undersampling render_scale still warns and is still honored.
+  file.write("[output.DP-1]\nrender_scale = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(*store.config().outputs[0].renderScale, 0.5);
+  CHECK(containsDiagnostic(store, "undersamples"));
+
   file.write("[output.DP-1]\nscale = 1.5\n");
   CHECK(store.reload().success);
   CHECK(!store.config().outputs[0].renderScale.has_value());
+  CHECK(!containsDiagnostic(store, "render_scale"));
 }
 
 UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {

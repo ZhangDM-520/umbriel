@@ -21,6 +21,7 @@ default_position = { x = 40, y = 40, anchor = "top_left" }
 [output."HEADLESS-1"]
 scale = 1.25
 render_scale = 2.0
+workspaces = 2
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 
@@ -61,6 +62,34 @@ presented=$(grep '^mapped ' "$CLIENT_LOG" | tail -1)
 echo "presented after reload: $presented"
 if [[ $presented != *"buffer 500x375"* || $presented != *"scale 150/120"* ]]; then
   echo "dropping render_scale did not re-notify the client back to the logical scale"
+  exit 1
+fi
+
+# A render scale below the logical scale is legal and must reach the client
+# unchanged (the scene re-derivation used to floor it back up to 1).
+before=$(grep -c '^mapped ' "$CLIENT_LOG")
+printf 'render_scale = 0.5\n' >> "$UMBRIEL_CONFIG"
+"$UMBRIEL" msg config-reload > /dev/null
+for _ in $(seq 60); do
+  [[ $(grep -c '^mapped ' "$CLIENT_LOG") -gt $before ]] && break
+  sleep 0.05
+done
+
+presented=$(grep '^mapped ' "$CLIENT_LOG" | tail -1)
+echo "presented below the logical scale: $presented"
+if [[ $presented != *"buffer 200x150"* || $presented != *"scale 60/120"* ]]; then
+  echo "a render_scale below the logical scale did not reach the client"
+  exit 1
+fi
+
+# Hiding and revealing the surface (a workspace round-trip) makes the scene
+# re-derive the hint: a sub-1 render scale must survive the re-derivation too.
+"$UMBRIEL" msg workspace-next > /dev/null
+"$UMBRIEL" msg workspace-previous > /dev/null
+presented=$(grep '^mapped ' "$CLIENT_LOG" | tail -1)
+echo "presented after a workspace round-trip: $presented"
+if [[ $presented != *"scale 60/120"* ]]; then
+  echo "the scene re-derivation dropped the below-logical render scale ($presented)"
   exit 1
 fi
 echo "render_scale drives the client hints and falls back to the logical scale on reload"
