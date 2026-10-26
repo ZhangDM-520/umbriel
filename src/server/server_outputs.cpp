@@ -107,6 +107,20 @@ namespace umbriel {
     }
   }
 
+  void Server::applyDownsampleMode() {
+    switch (config().appearance.downsample) {
+    case DownsampleMode::Box:
+      wlr_scene_set_downsample_mode(m_scene, WLR_SCENE_DOWNSAMPLE_BOX);
+      break;
+    case DownsampleMode::Bilinear:
+      wlr_scene_set_downsample_mode(m_scene, WLR_SCENE_DOWNSAMPLE_BILINEAR);
+      break;
+    case DownsampleMode::Nearest:
+      wlr_scene_set_downsample_mode(m_scene, WLR_SCENE_DOWNSAMPLE_NEAREST);
+      break;
+    }
+  }
+
   void Server::refreshOutputPolicies() {
     for (const auto& output : m_outputs) {
       output->updateVrr();

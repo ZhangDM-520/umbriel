@@ -123,6 +123,19 @@ enum wlr_scene_direct_scanout_status {
 };
 
 /**
+ * How a scene samples a source that shrinks into its destination (a client
+ * rendering above the output scale, a scaled-down window, a thumbnail).
+ */
+enum wlr_scene_downsample_mode {
+  /** Single-tap linear fetch (default). */
+  WLR_SCENE_DOWNSAMPLE_BILINEAR,
+  /** Area (box) average over the source's whole texel footprint. */
+  WLR_SCENE_DOWNSAMPLE_BOX,
+  /** Single-tap nearest fetch. */
+  WLR_SCENE_DOWNSAMPLE_NEAREST,
+};
+
+/**
  * A sub-tree in the scene-graph.
  *
  * Do not add members here. struct wlr_scene embeds this struct by value, so its
@@ -176,6 +189,10 @@ struct wlr_scene {
     // output's own scale.
     double (*preferred_scale_provider)(struct wlr_output* output, void* data);
     void* preferred_scale_provider_data;
+
+    // How minified scene buffers sample their source; see
+    // wlr_scene_set_downsample_mode. Zero is WLR_SCENE_DOWNSAMPLE_BILINEAR.
+    enum wlr_scene_downsample_mode downsample_mode;
   } WLR_PRIVATE;
 };
 
@@ -599,6 +616,13 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_ma
 void wlr_scene_set_preferred_scale_provider(
     struct wlr_scene* scene, double (*get)(struct wlr_output* output, void* data), void* data
 );
+
+/**
+ * Chooses how minified scene buffers are sampled. Sources that are not
+ * minified and buffers that pin WLR_SCALE_FILTER_NEAREST are unaffected.
+ * Defaults to WLR_SCENE_DOWNSAMPLE_BILINEAR.
+ */
+void wlr_scene_set_downsample_mode(struct wlr_scene* scene, enum wlr_scene_downsample_mode mode);
 
 /**
  * Add a node displaying nothing but its children.

@@ -705,6 +705,8 @@ namespace umbriel {
         },
         this
     );
+    // Minified buffers sample with the configured method (box by default).
+    applyDownsampleMode();
     if (linuxDmabuf != nullptr) {
       wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
     }

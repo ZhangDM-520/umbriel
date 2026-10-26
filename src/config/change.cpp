@@ -242,6 +242,7 @@ namespace umbriel {
             || before.appearance.tabBar != after.appearance.tabBar
             || before.appearance.titleBar != after.appearance.titleBar,
         .sceneBlur = sceneBlur,
+        .sceneDownsample = before.appearance.downsample != after.appearance.downsample,
         // [colors] owns the border, backdrop, insert-hint, and shadow colors, so
         // any color edit refreshes window chrome.
         .viewChrome = before.appearance != after.appearance
@@ -268,6 +269,7 @@ namespace umbriel {
         .workspaceInventory = true,
         .workspaceLayout = true,
         .sceneBlur = true,
+        .sceneDownsample = true,
         .viewChrome = true,
         .layerEffects = true,
         .animation = true,
@@ -380,6 +382,7 @@ namespace umbriel {
     add(workspaceInventory, "workspace inventory");
     add(workspaceLayout, "workspace layout");
     add(sceneBlur, "scene blur");
+    add(sceneDownsample, "scene downsample");
     add(viewChrome, "view chrome");
     add(internalUi, "internal UI");
     add(animation, "animation state");

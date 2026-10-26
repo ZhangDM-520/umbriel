@@ -376,6 +376,15 @@ UMBRIEL_TEST(identicalConfigsProduceNoRuntimeEffects) {
   CHECK(!ConfigEffects::between(before, after).any());
 }
 
+UMBRIEL_TEST(downsampleMethodChangeRefreshesSceneSampling) {
+  const Config before;
+  Config after;
+  after.appearance.downsample = umbriel::DownsampleMode::Nearest;
+  const ConfigEffects effects = ConfigEffects::between(before, after);
+  CHECK(effects.sceneDownsample);
+  CHECK(!ConfigEffects::between(before, before).sceneDownsample);
+}
+
 UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
   const ConfigEffects effects = ConfigEffects::everything();
   CHECK(effects.outputState);
@@ -384,6 +393,7 @@ UMBRIEL_TEST(firstLoadInvalidatesEveryRuntimeConsumer) {
   CHECK(effects.workspaceInventory);
   CHECK(effects.workspaceLayout);
   CHECK(effects.sceneBlur);
+  CHECK(effects.sceneDownsample);
   CHECK(effects.viewChrome);
   CHECK(effects.layerEffects);
   CHECK(effects.animation);

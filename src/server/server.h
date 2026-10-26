@@ -432,6 +432,7 @@ namespace umbriel {
     // Re-send every surface's output scale (views, layer surfaces, popups). Run after anything that changes an output's
     // scale or moves surfaces between outputs outside setWorkspace; the notifies dedup, so extra calls are cheap.
     void refreshSurfaceScales();
+    void applyDownsampleMode();
     // Re-evaluate each output's policy after keyboard focus or a dynamic window rule changes.
     void refreshOutputPolicies();
     [[nodiscard]] wlr_output* preferredOutput() const;

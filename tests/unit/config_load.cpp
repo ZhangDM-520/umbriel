@@ -796,6 +796,34 @@ render_scale = 1.0
   CHECK(!containsDiagnostic(store, "render_scale"));
 }
 
+UMBRIEL_TEST(appearanceDownsampleSelectsTheSamplingMethod) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  // Box is the default: minified sources area-average their texel footprint.
+  file.write("[appearance]\nborder_width = 1\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Box);
+  CHECK(!containsDiagnostic(store, "downsample"));
+
+  file.write("[appearance]\ndownsample = \"bilinear\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Bilinear);
+
+  file.write("[appearance]\ndownsample = \"nearest\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Nearest);
+
+  file.write("[appearance]\ndownsample = \"lanczos\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Box);
+
+  file.write("[appearance]\ndownsample = true\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Box);
+}
+
 UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
