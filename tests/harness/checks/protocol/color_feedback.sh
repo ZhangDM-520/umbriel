@@ -81,7 +81,7 @@ assert_surface PQ true
 
 if ! jq -se '
   any(.[]; .event == "manager" and .version == 2)
-  and ([.[] | select(.event == "feature") | .value] | unique | sort) == [1, 2, 4, 5, 6, 7]
+  and ([.[] | select(.event == "feature") | .value] | unique | sort) == [0, 1, 2, 3, 4, 5, 6, 7]
 ' "$CLIENT_LOG" > /dev/null; then
   echo "native color manager capabilities were incorrect: $(cat "$CLIENT_LOG")"
   exit 1
