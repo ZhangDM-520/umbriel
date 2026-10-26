@@ -404,8 +404,8 @@ static bool run_lut_fold_case(const struct lut_fold_case* fold_case) {
       // Even samples are grid nodes, odd samples sit between them.
       for (size_t sample = 0; sample <= 2 * (grid - 1); sample++) {
         const double x = (double)sample / (double)(2 * (grid - 1));
-        const double reference = lut_table_eval(second_rows[channel], second_dim,
-            lut_table_eval(first_rows[channel], first_dim, x));
+        const double reference =
+            lut_table_eval(second_rows[channel], second_dim, lut_table_eval(first_rows[channel], first_dim, x));
         const float in[3] = {(float)x, (float)x, (float)x};
         float out[3] = {0.0f, 0.0f, 0.0f};
         wlr_color_transform_eval(folded, out, in);
@@ -518,9 +518,10 @@ static bool test_compose_lut_fold_alloc_failure(void) {
   const bool refs_held = first->ref_count == first_refs && second->ref_count == second_refs;
   ok = check(refs_held, "fold failure releases each stage exactly once") && ok;
   if (!refs_held) {
-    fprintf(stderr,
-        "FAIL: stage ref_count after fold failure: first %d (expected %d), second %d (expected %d)\n",
-        first->ref_count, first_refs, second->ref_count, second_refs);
+    fprintf(
+        stderr, "FAIL: stage ref_count after fold failure: first %d (expected %d), second %d (expected %d)\n",
+        first->ref_count, first_refs, second->ref_count, second_refs
+    );
     return false;
   }
   wlr_color_transform_unref(held);

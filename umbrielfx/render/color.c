@@ -297,9 +297,7 @@ static bool fail_lut_fold_alloc_for_test = false;
 // and the production header stays free of it.
 void color_transform_fail_lut_fold_alloc_for_test(bool fail);
 
-void color_transform_fail_lut_fold_alloc_for_test(bool fail) {
-  fail_lut_fold_alloc_for_test = fail;
-}
+void color_transform_fail_lut_fold_alloc_for_test(bool fail) { fail_lut_fold_alloc_for_test = fail; }
 
 // Sample one table row at a normalized position, linearly the way the shaders
 // sample a LUT.
