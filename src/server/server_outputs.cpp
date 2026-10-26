@@ -107,17 +107,25 @@ namespace umbriel {
     }
   }
 
-  void Server::applyDownsampleMode() {
+  enum wlr_scene_downsample_mode Server::sceneDownsampleMode() {
     switch (config().appearance.downsample) {
     case DownsampleMode::Box:
-      wlr_scene_set_downsample_mode(m_scene, WLR_SCENE_DOWNSAMPLE_BOX);
-      break;
+      return WLR_SCENE_DOWNSAMPLE_BOX;
     case DownsampleMode::Bilinear:
-      wlr_scene_set_downsample_mode(m_scene, WLR_SCENE_DOWNSAMPLE_BILINEAR);
-      break;
+      return WLR_SCENE_DOWNSAMPLE_BILINEAR;
     case DownsampleMode::Nearest:
-      wlr_scene_set_downsample_mode(m_scene, WLR_SCENE_DOWNSAMPLE_NEAREST);
-      break;
+      return WLR_SCENE_DOWNSAMPLE_NEAREST;
+    }
+    return WLR_SCENE_DOWNSAMPLE_BILINEAR;
+  }
+
+  void Server::applyDownsampleMode() {
+    const enum wlr_scene_downsample_mode mode = sceneDownsampleMode();
+    wlr_scene_set_downsample_mode(m_scene, mode);
+    // Window-capture mirrors are separate scenes with their own policy, and
+    // they minify render_scale-supersampled buffers like the desktop scene.
+    for (const auto& view : m_registry.all()) {
+      view->applyDownsampleMode(mode);
     }
   }
 

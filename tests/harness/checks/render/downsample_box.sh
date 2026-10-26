@@ -11,6 +11,7 @@ source "$UMBRIEL_HARNESS_LIB"
 
 readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/downsample-box-client.log"
+readonly WINDOW_TITLE="downsample-box"
 
 cat >> "$UMBRIEL_CONFIG" <<'CONFIG'
 [animation]
@@ -41,6 +42,17 @@ await_lines "$CLIENT_LOG" 'mapped ' 1
 presented=$(grep '^mapped ' "$CLIENT_LOG" | tail -1)
 if [[ $presented != *"buffer 1200x900"* || $presented != *"scale 360/120"* ]]; then
   echo "the client did not render at render_scale 3.0 ($presented)"
+  exit 1
+fi
+
+WINDOW_ID=""
+for _ in $(seq 80); do
+  WINDOW_ID=$("$UMBRIEL" windows --json | jq -r --arg title "$WINDOW_TITLE" '.[] | select(.title == $title) | .id')
+  [[ -n $WINDOW_ID ]] && break
+  sleep 0.025
+done
+if [[ -z $WINDOW_ID ]]; then
+  echo "no window id for '$WINDOW_TITLE'"
   exit 1
 fi
 
@@ -78,9 +90,27 @@ expect_pair() {
   exit 1
 }
 
+# A toplevel capture draws the same buffer through the window's mirror scene,
+# which carries its own downsample policy. The capture is the window at 1:1
+# (400x300), so its px 41 and 42 hold the same texel groups as the output
+# probes and the same values apply.
+expect_toplevel_pair() {
+  local description=$1 g1=$2 b1=$3 g2=$4 b2=$5
+  for _ in $(seq 30); do
+    grim -T "$WINDOW_ID" "$IMAGE"
+    if probe_matches 41 190 0 "$g1" "$b1" && probe_matches 42 190 0 "$g2" "$b2"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "$description: got $(pixel 41 190) and $(pixel 42 190), expected 0 $g1 $b1 and 0 $g2 $b2"
+  exit 1
+}
+
 # Box: output px 41 covers two green texels and one blue (0,170,85), px 42 the
 # mirror (0,85,170) in the sRGB screenshot.
 expect_pair "box downsample" 170 85 85 170
+expect_toplevel_pair "box downsample in window captures" 170 85 85 170
 
 sed -i 's/downsample = "box"/downsample = "bilinear"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
@@ -88,11 +118,13 @@ sed -i 's/downsample = "box"/downsample = "bilinear"/' "$UMBRIEL_CONFIG"
 # Bilinear: one point sample per output pixel lands on a texel center and
 # reports that texel pure, dropping the other two (aliasing).
 expect_pair "bilinear downsample" 0 255 255 0 0
+expect_toplevel_pair "bilinear downsample in window captures" 0 255 255 0 0
 
 sed -i 's/downsample = "bilinear"/downsample = "box"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 "$UMBRIEL" settle > /dev/null
 expect_pair "box restored on reload" 170 85 85 170
+expect_toplevel_pair "capture downsample restored on reload" 170 85 85 170
 
 echo "downsample method controls minified sampling and reload re-renders"
 
