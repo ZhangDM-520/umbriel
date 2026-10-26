@@ -932,7 +932,7 @@ UMBRIEL_TEST(sdrGamutTransformKeepsWhiteIdenticalToNativePixels) {
       {.kind = umbriel::PanelTransfer::Kind::Gamma22, .encode = {}},
       {.kind = umbriel::PanelTransfer::Kind::Curve, .encode = {0.0F, 1.0F}},
   };
-  for (const auto whitePoint : {std::pair{0.3127F, 0.329F}, std::pair{0.3457F, 0.3585F}, std::pair{0.3324F, 0.3474F}}) {
+  for (const auto& whitePoint : {std::pair{0.3127F, 0.329F}, std::pair{0.3457F, 0.3585F}, std::pair{0.3324F, 0.3474F}}) {
     panel.white = {.x = whitePoint.first, .y = whitePoint.second};
     for (const umbriel::PanelTransfer& transfer : transfers) {
       umbriel::PanelColorimetry colorimetry{

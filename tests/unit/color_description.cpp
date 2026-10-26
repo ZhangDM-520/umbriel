@@ -622,7 +622,7 @@ UMBRIEL_TEST(bufferTransferFunctionsMapPowerFitsToNamedCurves) {
   // A fitted power curve renders through the nearest named EOTF exponent
   // (1.0 ext_linear, 2.2 gamma22, 2.4 bt1886) — the documented approximation.
   description.data.tf_named = 0;
-  for (const auto [exponent, expected] : {
+  for (const auto& [exponent, expected] : {
            std::pair{1.0F, WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR},
            std::pair{1.4F, WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR},
            std::pair{1.8F, WLR_COLOR_TRANSFER_FUNCTION_GAMMA22},
