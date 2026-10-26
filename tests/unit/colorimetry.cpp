@@ -269,10 +269,10 @@ namespace {
   // and the exact first crossing wherever that image is narrow enough for the
   // exactness tolerance to mean anything.
   void expectGeneralizedInverse(const umbriel::PanelTransfer& transfer, const std::vector<float>& envelope) {
-    const float envelopeScale = static_cast<float>(envelope.size() - 1);
+    const auto envelopeScale = static_cast<float>(envelope.size() - 1);
     const auto envelopeAt = [&](float encoded) {
       const float position = std::clamp(encoded, 0.0F, 1.0F) * envelopeScale;
-      const size_t lower = static_cast<size_t>(position);
+      const auto lower = static_cast<size_t>(position);
       const size_t upper = std::min(lower + 1, envelope.size() - 1);
       const float fraction = position - static_cast<float>(lower);
       return envelope[lower] + (envelope[upper] - envelope[lower]) * fraction;
@@ -280,7 +280,7 @@ namespace {
     const auto crossingOf = [&](float target) {
       return static_cast<float>(std::ranges::lower_bound(envelope, target) - envelope.begin()) / envelopeScale;
     };
-    const float tableScale = static_cast<float>(transfer.encode.size() - 1);
+    const auto tableScale = static_cast<float>(transfer.encode.size() - 1);
     // A curve whose decode does not reach zero makes targets below its floor
     // unrenderable: the generalized inverse is the clamped position zero and
     // decoding back lands on the floor, above the probe cell.
@@ -1542,7 +1542,7 @@ UMBRIEL_TEST(iccMutationFuzzRejectsOrParsesSanely) {
         bytes[position] = static_cast<uint8_t>(next());
         break;
       case 1:
-        bytes[position] ^= static_cast<uint8_t>(1u << (next() % 8));
+        bytes[position] ^= static_cast<uint8_t>(1U << (next() % 8));
         break;
       case 2: {
         const size_t run = std::min<size_t>(1 + next() % 64, bytes.size() - position);

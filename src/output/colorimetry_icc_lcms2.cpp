@@ -60,7 +60,7 @@ namespace umbriel {
         }
       }
       if (repaired) {
-        warnings.push_back("flattened a TRC that was non-finite or non-monotonic");
+        warnings.emplace_back("flattened a TRC that was non-finite or non-monotonic");
       }
     }
 
@@ -230,7 +230,7 @@ namespace umbriel {
       return result;
     }
     if (cmsIsTag(profile.get(), cmsSigVcgtTag)) {
-      result.warnings.push_back("ignoring vcgt tag (a pre-dispatch gamma ramp, not content colorimetry)");
+      result.warnings.emplace_back("ignoring vcgt tag (a pre-dispatch gamma ramp, not content colorimetry)");
     }
 
     const auto* red = static_cast<const cmsCIEXYZ*>(cmsReadTag(profile.get(), cmsSigRedColorantTag));
@@ -260,7 +260,7 @@ namespace umbriel {
       if (color_detail::invert3x3(chadMatrix, frame)) {
         frameFromChad = true;
       } else {
-        result.warnings.push_back("ignoring a singular chad tag");
+        result.warnings.emplace_back("ignoring a singular chad tag");
       }
     }
     if (!frameFromChad) {
@@ -334,7 +334,7 @@ namespace umbriel {
     std::vector<std::string> channelNotes;
     if (!sameCurve(redDecode, evaluateCurve(greenTrc, channelNotes))
         || !sameCurve(redDecode, evaluateCurve(blueTrc, channelNotes))) {
-      result.warnings.push_back("per-channel TRCs differ; using the red channel curve");
+      result.warnings.emplace_back("per-channel TRCs differ; using the red channel curve");
     }
 
     if (matchesDecode(redDecode, srgbDecodeSample)) {

@@ -534,7 +534,7 @@ namespace umbriel {
       // since. O_NONBLOCK plus the regular-file check keeps a FIFO or device
       // path from blocking the compositor thread.
       constexpr size_t kMaxProfileBytes = 32 * 1024 * 1024;
-      const std::string profilePath = source;
+      const std::string& profilePath = source;
       std::vector<uint8_t> bytes;
       const int fd = open(profilePath.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
       if (fd < 0) {

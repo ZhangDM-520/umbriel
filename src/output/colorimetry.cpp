@@ -128,7 +128,7 @@ namespace umbriel {
       return x;
     }
     const float position = color_detail::encodeGridPosition(x, transfer.encode.size());
-    const size_t lower = static_cast<size_t>(position);
+    const auto lower = static_cast<size_t>(position);
     const size_t upper = std::min(lower + 1, transfer.encode.size() - 1);
     const float fraction = position - static_cast<float>(lower);
     return transfer.encode[lower] + (transfer.encode[upper] - transfer.encode[lower]) * fraction;
