@@ -44,8 +44,8 @@ namespace umbriel {
   // encode table is linearly interpolated.
   [[nodiscard]] float panelEncodeSample(const PanelTransfer& transfer, float linear);
 
-  // Fitted transfer characteristic of a parsed profile (umbriel#574 wave 4,
-  // wp_image_description_creator_icc_v1). Srgb and Gamma22 are exact named
+  // Fitted transfer characteristic of a parsed profile
+  // (wp_image_description_creator_icc_v1). Srgb and Gamma22 are exact named
   // fast paths; Power is a parametric power fit in the protocol's
   // set_tf_power/tf_power vocabulary: the EOTF exponent e with
   // optical = electrical^e (the request's valid range is 1.0..10.0; a fit
@@ -62,8 +62,8 @@ namespace umbriel {
   };
 
   // Fit a transfer curve to what the renderer can express. Non-representable
-  // TRCs are approximated by a power fit — full fidelity needs per-buffer
-  // 3D LUTs (a new render transform type), out of scope for umbriel#574.
+  // TRCs are approximated by a power fit — faithful rendering of those needs
+  // per-buffer 3D LUTs (a new render transform type).
   [[nodiscard]] TransferFit fitTransfer(const PanelTransfer& transfer);
 
   // The encode curve baked to uint16 LUT entries for
@@ -128,9 +128,9 @@ namespace umbriel {
   panelColorimetryFromEdid(std::span<const uint8_t> edid, const wlr_color_primaries* defaultPrimaries);
 
   // Raw ICC bytes advertised by get_information's icc_file for a characterized
-  // output (umbriel#574 wave 5). Shared because image descriptions snapshot
-  // the store: every information request on the same description must return
-  // the exact same data.
+  // output. Shared because image descriptions snapshot the store: every
+  // information request on the same description must return the exact same
+  // data.
   using IccProfileStore = std::shared_ptr<const std::vector<uint8_t>>;
 
   // File characterization: the store keeps the exact bytes the parser accepted

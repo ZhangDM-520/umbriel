@@ -435,9 +435,8 @@ namespace umbriel {
       }
     }
 
-    // Surface transfer label: a fitted power curve (umbriel#574, tfPower) has
-    // no named protocol value and reported "none" before — misleading next to
-    // the named curves. Report the fitted exponent instead.
+    // Surface transfer label: a fitted power curve (tfPower) has no named
+    // protocol value. Report the fitted exponent instead.
     std::string surfaceTransferLabel(const ColorDescription* description) {
       if (description == nullptr) {
         return "none";

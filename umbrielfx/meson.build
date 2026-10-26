@@ -210,6 +210,7 @@ if build_tests
     'scene-scrgb-absolute-luminance',
     'scene-hdr-sdr-fallback',
     'hdr-white-point-math',
+    'compose-lut-fold',
     'hdr-white-point',
     'sdr-white-point-alpha',
     'sdr-curve-consistency',

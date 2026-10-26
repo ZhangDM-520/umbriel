@@ -25,10 +25,10 @@ namespace umbriel {
   struct ColorDescription {
     wlr_image_description_v1_data data{};
     wlr_color_primaries customPrimaries{};
-    // Fitted power transfer characteristic (umbriel#574 wave 4): the EOTF
-    // exponent of a power curve in the protocol's set_tf_power/tf_power
-    // vocabulary, 0 when unset. Named transfer functions live in data.tf_named;
-    // exactly one of the two is set for every client-visible description.
+    // Fitted power transfer characteristic: the EOTF exponent of a power curve
+    // in the protocol's set_tf_power/tf_power vocabulary, 0 when unset. Named
+    // transfer functions live in data.tf_named; exactly one of the two is set
+    // for every client-visible description.
     float tfPower = 0.0F;
     // Raw ICC bytes get_information advertises via its icc_file event ("ICC
     // profile matching the image description"). Empty when the description has
@@ -76,8 +76,8 @@ namespace umbriel {
       IccProfileStore iccProfile
   );
 
-  // Client-provided ICC descriptions (umbriel#574 wave 4,
-  // wp_image_description_creator_icc_v1.set_icc_file). The profile must be ICC
+  // Client-provided ICC descriptions
+  // (wp_image_description_creator_icc_v1.set_icc_file). The profile must be ICC
   // v2/v4, 3-channel, of Display or ColorSpace class, matrix-shaper only, and
   // at most 32 MB; anything else is rejected here and delivered as
   // wp_image_description_v1.failed ('unsupported') by the caller — never a
@@ -100,8 +100,8 @@ namespace umbriel {
   // exponent because wlr_scene_buffer_set_transfer_function takes only
   // wlr_color_transfer_function values (no arbitrary power curves). The
   // mapping is an approximation — faithful rendering of non-representable
-  // TRCs needs per-buffer 3D LUTs (out of scope, see fitTransfer). A
-  // description with no transfer function at all stays unspecified (0).
+  // TRCs needs per-buffer 3D LUTs (see fitTransfer). A description with no
+  // transfer function at all stays unspecified (0).
   [[nodiscard]] wlr_color_transfer_function bufferTransferFunction(const ColorDescription& description);
 
 } // namespace umbriel

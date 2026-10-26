@@ -152,12 +152,13 @@ namespace umbriel {
       identityMatrix(matrix);
       return;
     }
-    // Linear interpolation between the two gamuts (KWin's wideness semantics).
+    // Linear interpolation between the two gamuts (KWin's wideness semantics):
+    // the primaries slide while the white stays fixed.
     const wlr_color_primaries interp{
         .red = lerpXy(srgb.red, panel.red, amount),
         .green = lerpXy(srgb.green, panel.green, amount),
         .blue = lerpXy(srgb.blue, panel.blue, amount),
-        .white = lerpXy(srgb.white, panel.white, amount),
+        .white = srgb.white,
     };
     wlr_color_primaries_transform_absolute_colorimetric(&interp, &panel, matrix);
   }

@@ -66,9 +66,7 @@ namespace umbriel {
     // Numeric inversion of the evaluated decode curve (encoded -> linear) into
     // the panel encode curve (linear -> encoded). The forward curve is sampled
     // monotonically and inverted by binary search + interpolation: an
-    // estimation, accurate to the sampling resolution, and deliberately not a
-    // gamma fit of parametric curves (KWin's iccprofile.cpp documents the same
-    // pitfall in reverse).
+    // estimation, accurate to the sampling resolution.
     std::vector<float> invertDecodeCurve(const std::vector<float>& decode) {
       std::vector<float> encode(kCurveSamples);
       for (size_t target = 0; target < kCurveSamples; ++target) {
@@ -137,9 +135,9 @@ namespace umbriel {
       };
     }
 
-    // Synthesis (wave 5): the ICC TRC tags carry the decode curve (encoded ->
-    // linear), while a PanelTransfer carries the encode curve, so sampled
-    // kinds are inverted numerically here and the parser inverts back on read.
+    // The ICC TRC tags carry the decode curve (encoded -> linear), while a
+    // PanelTransfer carries the encode curve, so sampled kinds are inverted
+    // numerically here and the parser inverts back on read.
     std::vector<float> decodeFromEncode(const PanelTransfer& transfer) {
       std::vector<float> decode(kCurveSamples);
       for (size_t index = 0; index < kCurveSamples; ++index) {

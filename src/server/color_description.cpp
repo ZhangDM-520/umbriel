@@ -232,7 +232,7 @@ namespace umbriel {
     // takes only the named wlr_color_transfer_function values — so it renders
     // through the nearest named EOTF exponent (ext_linear 1.0, gamma22 2.2,
     // bt1886 2.4), midpoint-bounded. This is an approximation: faithful
-    // non-representable TRCs need per-buffer 3D LUTs (out of scope).
+    // non-representable TRCs need per-buffer 3D LUTs (see fitTransfer).
     if (description.tfPower <= 1.6F) {
       return WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR;
     }

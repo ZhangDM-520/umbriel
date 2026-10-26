@@ -132,10 +132,9 @@ namespace umbriel {
     [[nodiscard]] const PanelColorimetry* panelColorimetry() const {
       return m_panelColorimetry ? &*m_panelColorimetry : nullptr;
     }
-    // Raw ICC bytes behind get_information's icc_file advertising (wave 5):
-    // the exact file bytes for file characterizations, a synthesized
-    // matrix-shaper profile for EDID ones, and nothing when inert or built
-    // without lcms2.
+    // Raw ICC bytes behind get_information's icc_file advertising: the exact
+    // file bytes for file characterizations, a synthesized matrix-shaper
+    // profile for EDID ones, and nothing when inert or built without lcms2.
     [[nodiscard]] const IccProfileStore& iccProfileStore() const { return m_iccProfile; }
     // The supplied transform frames must carry while SDR gamut mapping is
     // staged: the frame paths' sdrGamutStaged decision, exposed for frame

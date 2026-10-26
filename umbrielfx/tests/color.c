@@ -332,6 +332,40 @@ static bool check_matrix_near(const float actual[static 9], const float expected
   return true;
 }
 
+// Two 3x1D LUTs in series fold into one stage in the composed transform: a
+// baked panel-TRC curve followed by a gamma-control ramp must stay a shape
+// consumers accept instead of arriving as two LUT stages. No renderer needed.
+static bool test_compose_lut_fold(void) {
+  enum { kDim = 5 };
+  uint16_t halve[kDim];
+  uint16_t invert[kDim];
+  for (size_t i = 0; i < kDim; i++) {
+    const uint16_t v = (uint16_t)(i * 65535 / (kDim - 1));
+    halve[i] = (uint16_t)(v / 2);
+    invert[i] = (uint16_t)(65535 - v);
+  }
+  struct wlr_color_transform* first = wlr_color_transform_init_lut_3x1d(kDim, halve, halve, halve);
+  struct wlr_color_transform* second = wlr_color_transform_init_lut_3x1d(kDim, invert, invert, invert);
+  bool ok = check(first != NULL && second != NULL, "build LUT stages");
+  struct wlr_color_transform* stages[] = {first, second};
+  struct wlr_color_transform* folded = NULL;
+  ok = check(color_transform_compose(&folded, stages, 2), "compose LUT pair") && ok;
+  ok = check(folded != NULL && folded->type == COLOR_TRANSFORM_LUT_3X1D, "folded into a single LUT stage") && ok;
+  if (folded != NULL && folded->type == COLOR_TRANSFORM_LUT_3X1D) {
+    for (int step = 0; step <= 4; step++) {
+      const float x = (float)step / 4.0f;
+      float in[3] = {x, x, x};
+      float out[3] = {0.0f, 0.0f, 0.0f};
+      wlr_color_transform_eval(folded, out, in);
+      ok = check(fabsf(out[0] - (1.0f - x / 2.0f)) < 0.01f, "folded samples match applying both LUTs in series") && ok;
+    }
+  }
+  wlr_color_transform_unref(first);
+  wlr_color_transform_unref(second);
+  wlr_color_transform_unref(folded);
+  return ok;
+}
+
 // These calculations need no renderer. In particular, a uniform dimming ramp
 // must retain its brightness instead of normalizing the adapted white to Y=1.
 static bool test_hdr_white_point_math(void) {
@@ -3178,6 +3212,9 @@ int main(int argc, char* argv[]) {
 
   if (strcmp(argv[1], "hdr-white-point-math") == 0) {
     return test_hdr_white_point_math() ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (strcmp(argv[1], "compose-lut-fold") == 0) {
+    return test_compose_lut_fold() ? EXIT_SUCCESS : EXIT_FAILURE;
   }
 
   struct fixture fixture;

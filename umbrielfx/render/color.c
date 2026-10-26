@@ -290,11 +290,42 @@ static size_t color_transform_compose_collect(
   return count;
 }
 
+// Two 3x1D LUTs in series (a baked panel-TRC curve followed by a gamma-control
+// ramp) fold into one table per channel: folded[i] = second(first[i]), sampled
+// linearly the way the shaders sample a LUT. Consumers downstream accept a
+// single LUT stage, so without the fold a gamma ramp would invalidate a
+// composed transform instead of composing with it.
+static struct wlr_color_transform*
+color_transform_fold_lut_pair(struct wlr_color_transform_lut_3x1d* first, struct wlr_color_transform_lut_3x1d* second) {
+  const size_t dim = first->dim;
+  uint16_t* folded = calloc(dim * 3, sizeof(uint16_t));
+  if (folded == NULL) {
+    return NULL;
+  }
+  for (size_t channel = 0; channel < 3; channel++) {
+    const uint16_t* first_row = &first->lut_3x1d[channel * dim];
+    const uint16_t* second_row = &second->lut_3x1d[channel * second->dim];
+    uint16_t* out_row = &folded[channel * dim];
+    for (size_t i = 0; i < dim; i++) {
+      const double position = first_row[i] / 65535.0 * (double)(second->dim - 1);
+      const size_t lower = (size_t)position;
+      const size_t upper = lower + 1 < second->dim ? lower + 1 : second->dim - 1;
+      const double a = second_row[lower] / 65535.0;
+      const double b = second_row[upper] / 65535.0;
+      out_row[i] = (uint16_t)lround((a + (b - a) * (position - (double)lower)) * 65535.0);
+    }
+  }
+  struct wlr_color_transform* result = wlr_color_transform_init_lut_3x1d(dim, folded, &folded[dim], &folded[dim * 2]);
+  free(folded);
+  return result;
+}
+
 bool color_transform_compose(struct wlr_color_transform** result, struct wlr_color_transform** transforms, size_t len) {
   // The normalized form has the following properties :
   // - No NULL transform in a pipeline
   // - No pipeline of length 1
   // - No nested pipelines
+  // - No two consecutive 3x1D LUTs (they fold into one)
   bool status = false;
 
   size_t result_len = color_transform_compose_collect(NULL, 0, transforms, len);
@@ -308,6 +339,32 @@ bool color_transform_compose(struct wlr_color_transform** result, struct wlr_col
     return false;
   }
   color_transform_compose_collect(result_transforms, result_len, transforms, len);
+
+  size_t composed_len = 0;
+  for (size_t i = 0; i < result_len; i++) {
+    struct wlr_color_transform* current = result_transforms[i];
+    if (composed_len > 0
+        && result_transforms[composed_len - 1]->type == COLOR_TRANSFORM_LUT_3X1D
+        && current->type == COLOR_TRANSFORM_LUT_3X1D) {
+      struct wlr_color_transform* folded = color_transform_fold_lut_pair(
+          color_transform_lut_3x1d_from_base(result_transforms[composed_len - 1]),
+          color_transform_lut_3x1d_from_base(current)
+      );
+      wlr_color_transform_unref(result_transforms[composed_len - 1]);
+      wlr_color_transform_unref(current);
+      if (folded == NULL) {
+        for (size_t j = i + 1; j < result_len; j++) {
+          wlr_color_transform_unref(result_transforms[j]);
+        }
+        result_len = composed_len;
+        goto cleanup_transforms;
+      }
+      result_transforms[composed_len - 1] = folded;
+      continue;
+    }
+    result_transforms[composed_len++] = current;
+  }
+  result_len = composed_len;
 
   if (result_len == 1) {
     *result = wlr_color_transform_ref(result_transforms[0]);
