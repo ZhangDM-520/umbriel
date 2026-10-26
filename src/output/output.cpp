@@ -8,6 +8,7 @@
 #include "input/seat.h"
 #include "layer/layer_surface.h"
 #include "lock/session_lock.h"
+#include "output/colorimetry.h"
 #include "output/cursor_plane_pace.h"
 #include "output/format_sequence.h"
 #include "output/frame_schedule.h"
@@ -43,6 +44,8 @@ extern "C" {
 #include <ctime>
 #include <drm_fourcc.h>
 #include <format>
+#include <fstream>
+#include <vector>
 
 #ifdef TRACY_ENABLE
 #include <set>
@@ -459,6 +462,117 @@ namespace umbriel {
     return rule != nullptr ? rule->sdrTransfer : SdrTransfer::Gamma22;
   }
 
+  SdrGamut Output::configuredSdrGamut() const {
+    const OutputRule* rule = findOutputRule(config(), identity());
+    return rule != nullptr ? rule->sdrGamut : SdrGamut::Native;
+  }
+
+  std::string Output::configuredColorProfile() const {
+    const OutputRule* rule = findOutputRule(config(), identity());
+    return rule != nullptr ? rule->colorProfile : "none";
+  }
+
+  wlr_color_transform* Output::stagedSdrGamutTransform() const {
+    return sdrGamutStaged(m_sdrGamutTransform != nullptr, configuredSdrGamut(), hdrActive()) ? m_sdrGamutTransform.get()
+                                                                                             : nullptr;
+  }
+
+  void Output::updateSdrGamutTransform(const OutputRule* rule, bool force) {
+    const std::string source = rule != nullptr ? rule->colorProfile : "none";
+    const SdrGamut gamut = rule != nullptr ? rule->sdrGamut : SdrGamut::Native;
+    const std::string key = source + "|" + (gamut == SdrGamut::Srgb ? "srgb" : "native");
+    if (!force && m_sdrGamutResolved && m_sdrGamutSource == key) {
+      return;
+    }
+    m_sdrGamutSource = key;
+    m_sdrGamutResolved = true;
+    m_sdrGamutTransform.reset();
+    m_panelColorimetry.reset();
+    m_iccProfile.reset();
+
+    // A changed characterization changes protocol output descriptions (the
+    // panel's custom primaries), so the description refresh must re-fire here.
+    if (source == "none") {
+      m_server->updateColorPreferences();
+      return;
+    }
+
+    // Characterization priority: ICC file > EDID > none. Failures fall back
+    // down that chain instead of failing the config (never fail the output).
+    std::optional<PanelColorimetry> panel;
+    if (source != "edid") {
+      constexpr std::streamoff kMaxProfileBytes = 32 * 1024 * 1024;
+      std::ifstream file(source, std::ios::binary | std::ios::ate);
+      const std::streamoff size = file ? static_cast<std::streamoff>(file.tellg()) : 0;
+      std::vector<uint8_t> bytes;
+      if (size <= 0 || size > kMaxProfileBytes) {
+        kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, source);
+      } else {
+        bytes.resize(static_cast<size_t>(size));
+        file.seekg(0);
+        if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
+          kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, source);
+          bytes.clear();
+        }
+      }
+      if (!bytes.empty()) {
+        IccParse parsed = parseIccProfile(bytes);
+        for (const std::string& warning : parsed.warnings) {
+          kLog.warn("output '{}': color profile '{}': {}", m_output->name, source, warning);
+        }
+        if (parsed.colorimetry) {
+          panel = std::move(parsed.colorimetry);
+          // Wave 5: the advertised profile is the file exactly as configured.
+          m_iccProfile = iccStoreForFileProfile(bytes);
+        } else {
+          kLog.warn(
+              "output '{}': color profile '{}' rejected ({}); falling back to EDID", m_output->name, source,
+              parsed.error
+          );
+        }
+      }
+    }
+    if (!panel) {
+      panel = panelColorimetryFromEdid(edidBlobForOutput(m_output), m_output->default_primaries);
+      if (!panel) {
+        kLog.warn(
+            "output '{}': no usable color characterization ({}); SDR gamut mapping stays inactive", m_output->name,
+            source == "edid" ? "no EDID" : "no EDID fallback"
+        );
+        m_server->updateColorPreferences();
+        return;
+      }
+      // EDID characterization: the advertised profile is synthesized from the
+      // panel colorimetry (nothing when built without lcms2).
+      m_iccProfile = iccStoreForPanel(&*panel);
+    }
+    m_panelColorimetry = std::move(panel);
+
+    // "native" stages no SDR output transform at all: pixels stay bit-identical
+    // to an uncharacterized output even with a profile configured. The
+    // characterization above still feeds protocol descriptions, independently
+    // of the sdr_gamut policy.
+    if (gamut == SdrGamut::Native) {
+      m_server->updateColorPreferences();
+      return;
+    }
+    if (!m_server->renderer()->features.output_color_transform) {
+      kLog.warn("output '{}': SDR gamut mapping needs the renderer's FP16 output transform", m_output->name);
+      m_server->updateColorPreferences();
+      return;
+    }
+
+    wlr_color_transform* transform = buildSdrGamutTransform(*m_panelColorimetry);
+    if (transform == nullptr) {
+      kLog.error("output '{}': failed to build the SDR gamut transform", m_output->name);
+      m_server->updateColorPreferences();
+      return;
+    }
+    m_sdrGamutTransform = ColorTransformPtr(transform);
+    kLog.info("output '{}': SDR gamut mapping active ({} into panel colorimetry)", m_output->name, source);
+    m_server->updateColorPreferences();
+  }
+
   void Output::setRuntimeSdrWhite(float nits) {
     if (m_runtimeSdrWhite && *m_runtimeSdrWhite == nits) {
       return;
@@ -610,6 +724,7 @@ namespace umbriel {
       m_workspaceGroup->abandonReveal();
     }
     const OutputRule* rule = findOutputRule(config(), identity());
+    updateSdrGamutTransform(rule, stageGeometry);
     const auto sdrTransfer = configuredSdrTransfer() == SdrTransfer::Srgb ? WLR_COLOR_TRANSFER_FUNCTION_SRGB
                                                                           : WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
     if (!wlr_scene_output_set_sdr_transfer_function(m_sceneOutput, sdrTransfer)) {
@@ -817,6 +932,12 @@ namespace umbriel {
         sceneOptions.capture_sdr = targetHdr && captureLocks > 0;
         sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
         m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
+        // The SDR gamut mapping rides the scene's supplied transform. An active
+        // HDR image description owns the output transform instead (the scene
+        // asserts the two are never combined).
+        if (sdrGamutStaged(m_sdrGamutTransform != nullptr, configuredSdrGamut(), targetHdr)) {
+          sceneOptions.color_transform = m_sdrGamutTransform.get();
+        }
 
         const RenderedStateCommitResult commitResult = commitRenderedState(
             frameState,
@@ -1711,6 +1832,9 @@ namespace umbriel {
     } else {
       // Mode changes can drop the DRM gamma LUT; re-apply on the next frame.
       m_gammaDirty = true;
+      // A mode change also rebuilds the SDR gamut transform so the supplied
+      // scene transform is re-established from the current characterization.
+      updateSdrGamutTransform(findOutputRule(config(), identity()), true);
       updateHdrAvailability();
       m_server->updateColorPreferences();
     }
@@ -1948,6 +2072,9 @@ namespace umbriel {
       sceneOptions.capture_sdr = hdrActive() && captureLocks > 0;
       sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
       m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
+      if (sdrGamutStaged(m_sdrGamutTransform != nullptr, configuredSdrGamut(), hdrActive())) {
+        sceneOptions.color_transform = m_sdrGamutTransform.get();
+      }
       sceneOptions.require_animation_success = m_workspaceGroup != nullptr && m_workspaceGroup->revealActive();
       if (sceneOptions.require_animation_success) {
         sceneOptions.workspace_from = m_workspaceGroup->revealRoot(false);

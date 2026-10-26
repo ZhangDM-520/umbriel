@@ -635,6 +635,48 @@ UMBRIEL_TEST(outputSdrTransferReloadOnlyRefreshesOutputState) {
   CHECK(!ConfigEffects::between(after, after).any());
 }
 
+UMBRIEL_TEST(outputColorProfileReloadOnlyRefreshesOutputState) {
+  Config before;
+  OutputRule original;
+  original.name = "HEADLESS-1";
+  before.outputs.push_back(original);
+
+  Config after = before;
+  after.outputs[0].colorProfile = "edid";
+  CHECK(ConfigChange::between(before, after).outputs);
+  const ConfigEffects changed = ConfigEffects::between(before, after);
+  CHECK(changed.outputState);
+  CHECK_EQ(changed.summary(), std::string{"output state"});
+  CHECK(!changed.workspaceInventory);
+  CHECK(!changed.workspaceLayout);
+
+  const ConfigEffects reset = ConfigEffects::between(after, before);
+  CHECK(reset.outputState);
+  CHECK_EQ(reset.summary(), std::string{"output state"});
+  CHECK(!ConfigEffects::between(after, after).any());
+}
+
+UMBRIEL_TEST(outputSdrGamutReloadOnlyRefreshesOutputState) {
+  Config before;
+  OutputRule original;
+  original.name = "HEADLESS-1";
+  before.outputs.push_back(original);
+
+  Config after = before;
+  after.outputs[0].sdrGamut = umbriel::SdrGamut::Srgb;
+  CHECK(ConfigChange::between(before, after).outputs);
+  const ConfigEffects changed = ConfigEffects::between(before, after);
+  CHECK(changed.outputState);
+  CHECK_EQ(changed.summary(), std::string{"output state"});
+  CHECK(!changed.workspaceInventory);
+  CHECK(!changed.workspaceLayout);
+
+  const ConfigEffects reset = ConfigEffects::between(after, before);
+  CHECK(reset.outputState);
+  CHECK_EQ(reset.summary(), std::string{"output state"});
+  CHECK(!ConfigEffects::between(after, after).any());
+}
+
 UMBRIEL_TEST(outputScrollingDefaultOnlyRefreshesWorkspaceLayout) {
   Config before;
   OutputRule output;

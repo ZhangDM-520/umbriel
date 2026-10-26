@@ -7,11 +7,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdint>
+#include <cstring>
+#include <fcntl.h>
+#include <filesystem>
 #include <format>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -66,6 +72,44 @@ namespace umbriel {
       if (node.value<std::string>() != "dynamic") {
         errorAt(node.source(), R"({} must be a count, a name array, or "dynamic")", path);
       }
+    }
+
+    // "none", "edid", or a path to an ICC profile. Config stays pure data: the
+    // file is only checked for readability here and parsed at apply time.
+    void parseColorProfile(const toml::node& node, const std::string& path, OutputRule& target) {
+      const auto value = node.value<std::string>();
+      if (!value || value->empty() || value->contains('\0')) {
+        warnAt(node.source(), R"(ignoring {} (expected "none", "edid", or a profile path))", path);
+        return;
+      }
+      if (*value == "none" || *value == "edid") {
+        target.colorProfile = *value;
+        return;
+      }
+      std::filesystem::path file(*value);
+      if (file.is_relative()) {
+        if (node.source().path == nullptr || node.source().path->empty()) {
+          warnAt(node.source(), "ignoring {} (relative profile path requires a config source path)", path);
+          return;
+        }
+        file = std::filesystem::path(*node.source().path).parent_path() / file;
+      }
+      file = file.lexically_normal();
+      // O_NONBLOCK avoids hanging on a FIFO before fstat can reject it. The
+      // bytes are never read here: ICC parsing happens at apply time.
+      const int fd = open(file.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+      if (fd < 0) {
+        warnAt(node.source(), "ignoring {} (cannot read profile '{}': {})", path, file.string(), std::strerror(errno));
+        return;
+      }
+      struct stat metadata{};
+      const bool regular = fstat(fd, &metadata) == 0 && S_ISREG(metadata.st_mode);
+      close(fd);
+      if (!regular) {
+        warnAt(node.source(), "ignoring {} (profile '{}' must be a readable regular file)", path, file.string());
+        return;
+      }
+      target.colorProfile = file.string();
     }
 
     const registry::Fields<OutputRule>& outputFields() {
@@ -143,6 +187,17 @@ namespace umbriel {
           registry::choice(
               "sdr_transfer", &O::sdrTransfer,
               {{.name = "gamma22", .value = SdrTransfer::Gamma22}, {.name = "srgb", .value = SdrTransfer::Srgb}}
+          ),
+          custom<O>(
+              "color_profile", KeyDescription("string").withValues({"none", "edid"}).withFormat("path"),
+              [](const toml::node& node, const std::string& path, O& target, registry::ReadContext&) {
+                parseColorProfile(node, path, target);
+              },
+              [](const O& defaults) { return nlohmann::ordered_json(defaults.colorProfile); }
+          ),
+          registry::choice(
+              "sdr_gamut", &O::sdrGamut,
+              {{.name = "srgb", .value = SdrGamut::Srgb}, {.name = "native", .value = SdrGamut::Native}}
           ),
           custom<O>(
               "bit_depth", KeyDescription("int").withRange(8, 10),

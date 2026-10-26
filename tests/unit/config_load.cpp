@@ -24,6 +24,7 @@ using umbriel::HdrMode;
 using umbriel::LayoutMode;
 using umbriel::ModifierKey;
 using umbriel::ModRightDoubleClick;
+using umbriel::SdrGamut;
 using umbriel::SdrTransfer;
 using umbriel::TrackLayout;
 using umbriel::VrrMode;
@@ -1667,6 +1668,93 @@ UMBRIEL_TEST(outputSdrTransferRejectsInvalidValuesWithoutUnknownKeyWarnings) {
     CHECK(store.config().outputs[0].sdrTransfer == SdrTransfer::Gamma22);
     CHECK(containsDiagnostic(store, "ignoring output.DP-1.sdr_transfer"));
     CHECK(containsDiagnostic(store, "expected \"gamma22\" or \"srgb\""));
+    CHECK(!containsDiagnostic(store, "unknown key"));
+  }
+}
+
+UMBRIEL_TEST(outputColorProfileLoadsDefaultsEdidAndPaths) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[output.DP-1]\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs.size(), size_t{1});
+  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"none"});
+
+  file.write("[output.DP-1]\ncolor_profile = \"edid\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"edid"});
+  CHECK(!containsDiagnostic(store, "output.DP-1.color_profile"));
+
+  // A readable path is accepted as data; the parser never parses it as an ICC profile.
+  const std::filesystem::path profilePath = file.path().string() + ".icc";
+  {
+    std::ofstream profile(profilePath);
+    profile << "not an ICC profile";
+  }
+  file.write("[output.DP-1]\ncolor_profile = \"" + profilePath.string() + "\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs[0].colorProfile, profilePath.string());
+  CHECK(!containsDiagnostic(store, "output.DP-1.color_profile"));
+  std::filesystem::remove(profilePath);
+
+  file.write("[output.DP-1]\ncolor_profile = \"/nonexistent/umbriel-missing-profile.icc\"\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"none"});
+  CHECK(containsDiagnostic(store, "ignoring output.DP-1.color_profile"));
+
+  file.write("[output.DP-1]\ncolor_profile = 3\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs[0].colorProfile, std::string{"none"});
+  CHECK(containsDiagnostic(store, "ignoring output.DP-1.color_profile"));
+}
+
+UMBRIEL_TEST(outputSdrGamutLoadsAndDefaultsToNative) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[output.DP-1]\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs.size(), size_t{1});
+  CHECK(store.config().outputs[0].sdrGamut == SdrGamut::Native);
+
+  file.write("[output.DP-1]\nsdr_gamut = \"srgb\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().outputs[0].sdrGamut == SdrGamut::Srgb);
+  CHECK(!containsDiagnostic(store, "output.DP-1.sdr_gamut"));
+
+  file.write("[output.DP-1]\nsdr_gamut = \"native\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().outputs[0].sdrGamut == SdrGamut::Native);
+  CHECK(!containsDiagnostic(store, "output.DP-1.sdr_gamut"));
+
+  file.write("[output.DP-1]\nsdr_gamut = \"srgb\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().outputs[0].sdrGamut == SdrGamut::Srgb);
+  file.write("[output.DP-1]\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().outputs[0].sdrGamut == SdrGamut::Native);
+}
+
+UMBRIEL_TEST(outputSdrGamutRejectsInvalidValuesWithoutUnknownKeyWarnings) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  for (const char* value : {"true", "1", "1.0", "[]", "{}", "\"SRGB\"", "\"wide\"", "\"\""}) {
+    file.write("[output.DP-1]\nsdr_gamut = \"srgb\"\n");
+    CHECK(store.reload().success);
+    CHECK(store.config().outputs[0].sdrGamut == SdrGamut::Srgb);
+
+    file.write("[output.DP-1]\nhdr = \"on\"\nsdr_gamut = " + std::string(value) + "\n");
+    CHECK(store.reload().success);
+    CHECK_EQ(store.config().outputs.size(), size_t{1});
+    CHECK(store.config().outputs[0].hdr == HdrMode::On);
+    CHECK(store.config().outputs[0].sdrGamut == SdrGamut::Native);
+    CHECK(containsDiagnostic(store, "ignoring output.DP-1.sdr_gamut"));
+    CHECK(containsDiagnostic(store, "expected \"srgb\" or \"native\""));
     CHECK(!containsDiagnostic(store, "unknown key"));
   }
 }
