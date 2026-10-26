@@ -117,7 +117,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
 
 `render_scale` separates what things look like from what clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
 
-Applications that ignore the scale hints render as they always have. Values below `scale` are honored but undersample, which looks blurry. Hint-following buffers sized at `render_scale` no longer match the output mode while `render_scale` differs from `scale`, so they do not qualify for [direct scanout](#direct-scanout); set `render_scale` equal to `scale` for scanout-sensitive games.
+Applications that ignore the scale hints render as they always have. Values below `scale` are honored but undersample, which looks blurry. The configuration warning compares `render_scale` against the configured `scale` (1.0 when `scale` is unset), so it cannot see an auto-detected output scale. Hint-following buffers sized at `render_scale` no longer match the output mode while `render_scale` differs from `scale`, so they do not qualify for [direct scanout](#direct-scanout); set `render_scale` equal to `scale` for scanout-sensitive games.
 
 Larger client buffers cost memory and sampling work: at `render_scale = 2.0` with `scale = 1.35` they hold about 2.2 times as many pixels as at `scale` alone, growing with the square of the ratio. Prefer whole or half-integer values for crisp buffer ratios.
 

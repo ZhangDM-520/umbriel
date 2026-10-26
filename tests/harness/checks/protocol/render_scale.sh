@@ -6,6 +6,7 @@
 # scale. Dropping the key on a reload must re-notify the client back to the
 # logical scale.
 set -euo pipefail
+source "$UMBRIEL_HARNESS_LIB"
 
 readonly CLIENT="${UMBRIEL_FRACTIONAL_CLIENT:-./build-debug/tests/fractional-client}"
 readonly CLIENT_LOG="$UMBRIEL_RUNTIME_DIR/render-scale-client.log"
@@ -53,10 +54,10 @@ awk -v a="$render_shown" 'BEGIN { exit !(a + 0 == 2.0) }' || {
 before=$(grep -c '^mapped ' "$CLIENT_LOG")
 sed -i '/render_scale/d' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
-for _ in $(seq 60); do
-  [[ $(grep -c '^mapped ' "$CLIENT_LOG") -gt $before ]] && break
-  sleep 0.05
-done
+if ! await_lines "$CLIENT_LOG" 'mapped ' $((before + 1)) 0.05; then
+  echo "dropping render_scale produced no new presentation to assert on"
+  exit 1
+fi
 
 presented=$(grep '^mapped ' "$CLIENT_LOG" | tail -1)
 echo "presented after reload: $presented"
@@ -66,14 +67,14 @@ if [[ $presented != *"buffer 500x375"* || $presented != *"scale 150/120"* ]]; th
 fi
 
 # A render scale below the logical scale is legal and must reach the client
-# unchanged (the scene re-derivation used to floor it back up to 1).
+# unchanged.
 before=$(grep -c '^mapped ' "$CLIENT_LOG")
 printf 'render_scale = 0.5\n' >> "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
-for _ in $(seq 60); do
-  [[ $(grep -c '^mapped ' "$CLIENT_LOG") -gt $before ]] && break
-  sleep 0.05
-done
+if ! await_lines "$CLIENT_LOG" 'mapped ' $((before + 1)) 0.05; then
+  echo "a render_scale below the logical scale produced no new presentation to assert on"
+  exit 1
+fi
 
 presented=$(grep '^mapped ' "$CLIENT_LOG" | tail -1)
 echo "presented below the logical scale: $presented"
@@ -84,8 +85,16 @@ fi
 
 # Hiding and revealing the surface (a workspace round-trip) makes the scene
 # re-derive the hint: a sub-1 render scale must survive the re-derivation too.
+# The reveal re-presents the surface, so assert on a FRESH mapped line
+# (count-polled): a same-scale re-notify is deduped below the wire, and reading
+# the previous line would pass vacuously without the round-trip doing anything.
+before=$(grep -c '^mapped ' "$CLIENT_LOG")
 "$UMBRIEL" msg workspace-next > /dev/null
 "$UMBRIEL" msg workspace-previous > /dev/null
+if ! await_lines "$CLIENT_LOG" 'mapped ' $((before + 1)) 0.05; then
+  echo "the workspace round-trip produced no new presentation to assert on"
+  exit 1
+fi
 presented=$(grep '^mapped ' "$CLIENT_LOG" | tail -1)
 echo "presented after a workspace round-trip: $presented"
 if [[ $presented != *"scale 60/120"* ]]; then
