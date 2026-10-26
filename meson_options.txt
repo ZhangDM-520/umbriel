@@ -28,5 +28,5 @@ option(
   'lcms2',
   type: 'feature',
   value: 'auto',
-  description: 'ICC profile characterization for output color gamut mapping (auto: build the ICC path when lcms2 is present, else the inert fallback)',
+  description: 'ICC profile support: output characterization for SDR gamut mapping and client ICC image descriptions (auto: build the ICC path when lcms2 is present, else the inert fallback)',
 )

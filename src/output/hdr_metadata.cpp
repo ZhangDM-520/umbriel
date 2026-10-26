@@ -22,12 +22,17 @@ namespace umbriel {
       return std::isfinite(value) ? std::clamp(static_cast<double>(value), 0.0, maximum) : 0.0;
     }
 
+    // The hull bound is Z >= 0 as x + y <= 1. Measured and s15Fixed16-quantized
+    // colorants land a few 1e-5 on the wrong side of that line for legitimate
+    // limb primaries (e.g. 0.68/0.32), so the bound admits that much noise.
+    constexpr double kHullSlack = 1e-4;
+
     bool validCoordinate(const wlr_color_cie1931_xy& coordinate) {
       return std::isfinite(coordinate.x)
           && std::isfinite(coordinate.y)
           && coordinate.x >= 0.0
           && coordinate.y >= 0.0
-          && coordinate.x + coordinate.y <= 1.0;
+          && coordinate.x + coordinate.y <= 1.0 + kHullSlack;
     }
 
 #if UMBRIEL_HAS_DRM_BACKEND

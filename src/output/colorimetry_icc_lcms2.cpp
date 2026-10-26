@@ -1,7 +1,9 @@
-// ICC matrix-shaper parsing via lcms2 (umbriel#574). Compiled only when the
+// ICC matrix-shaper parsing via lcms2. Compiled only when the
 // build finds lcms2; colorimetry_icc_fallback.cpp is its inert counterpart.
 
 #include "output/colorimetry.h"
+#include "output/colorimetry_internal.h"
+#include "output/hdr_metadata.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,8 +19,6 @@ namespace umbriel {
 
   namespace {
 
-    // Forward-curve resolution for named-curve detection and encode inversion.
-    constexpr size_t kCurveSamples = 256;
     // Named fast paths compare the evaluated curve; anything looser is baked.
     constexpr float kCurveMatchTolerance = 1e-3F;
 
@@ -35,12 +35,42 @@ namespace umbriel {
       return encoded <= 0.04045F ? encoded / 12.92F : std::pow((encoded + 0.055F) / 1.055F, 2.4F);
     }
 
-    std::vector<float> evaluateCurve(const cmsToneCurve* curve) {
-      std::vector<float> samples(kCurveSamples);
-      for (size_t index = 0; index < kCurveSamples; ++index) {
-        const float encoded = static_cast<float>(index) / static_cast<float>(kCurveSamples - 1);
+    // Untrusted curves can evaluate to non-finite values and need not
+    // increase; the inversion and the fit below require a finite monotone
+    // decode, so flatten the samples onto that envelope and say so.
+    void sanitizeDecodeCurve(std::vector<float>& samples, std::vector<std::string>& warnings) {
+      bool repaired = false;
+      float lastFinite = 0.0F;
+      for (float& sample : samples) {
+        if (!std::isfinite(sample)) {
+          sample = lastFinite;
+          repaired = true;
+          continue;
+        }
+        lastFinite = std::clamp(sample, 0.0F, 1.0F);
+        sample = lastFinite;
+      }
+      float runningMax = 0.0F;
+      for (float& sample : samples) {
+        if (sample < runningMax) {
+          sample = runningMax;
+          repaired = true;
+        } else {
+          runningMax = sample;
+        }
+      }
+      if (repaired) {
+        warnings.push_back("flattened a TRC that was non-finite or non-monotonic");
+      }
+    }
+
+    std::vector<float> evaluateCurve(const cmsToneCurve* curve, std::vector<std::string>& warnings) {
+      std::vector<float> samples(color_detail::kCurveSamples);
+      for (size_t index = 0; index < color_detail::kCurveSamples; ++index) {
+        const float encoded = static_cast<float>(index) / static_cast<float>(color_detail::kCurveSamples - 1);
         samples[index] = cmsEvalToneCurveFloat(curve, encoded);
       }
+      sanitizeDecodeCurve(samples, warnings);
       return samples;
     }
 
@@ -64,13 +94,13 @@ namespace umbriel {
     }
 
     // Numeric inversion of the evaluated decode curve (encoded -> linear) into
-    // the panel encode curve (linear -> encoded). The forward curve is sampled
-    // monotonically and inverted by binary search + interpolation: an
-    // estimation, accurate to the sampling resolution.
+    // the panel encode curve (linear -> encoded) on the sampled encode grid.
+    // The forward curve is monotone (sanitized) and inverted by binary search
+    // plus interpolation: an estimation, accurate to the sampling resolution.
     std::vector<float> invertDecodeCurve(const std::vector<float>& decode) {
-      std::vector<float> encode(kCurveSamples);
-      for (size_t target = 0; target < kCurveSamples; ++target) {
-        const float linear = static_cast<float>(target) / static_cast<float>(kCurveSamples - 1);
+      std::vector<float> encode(decode.size());
+      for (size_t target = 0; target < encode.size(); ++target) {
+        const float linear = color_detail::encodeGridLinear(target, encode.size());
         const auto upper = std::ranges::lower_bound(decode, linear);
         if (upper == decode.begin()) {
           encode[target] = 0.0F;
@@ -90,37 +120,16 @@ namespace umbriel {
       return encode;
     }
 
-    bool invert3x3(const double in[9], double out[9]) {
-      const double determinant = in[0] * (in[4] * in[8] - in[5] * in[7])
-          - in[1] * (in[3] * in[8] - in[5] * in[6])
-          + in[2] * (in[3] * in[7] - in[4] * in[6]);
-      if (!std::isfinite(determinant) || std::abs(determinant) < 1e-12) {
-        return false;
-      }
-      out[0] = (in[4] * in[8] - in[5] * in[7]) / determinant;
-      out[1] = (in[2] * in[7] - in[1] * in[8]) / determinant;
-      out[2] = (in[1] * in[5] - in[2] * in[4]) / determinant;
-      out[3] = (in[5] * in[6] - in[3] * in[8]) / determinant;
-      out[4] = (in[0] * in[8] - in[2] * in[6]) / determinant;
-      out[5] = (in[2] * in[3] - in[0] * in[5]) / determinant;
-      out[6] = (in[3] * in[7] - in[4] * in[6]) / determinant;
-      out[7] = (in[1] * in[6] - in[0] * in[7]) / determinant;
-      out[8] = (in[0] * in[4] - in[1] * in[3]) / determinant;
-      return true;
-    }
-
     void multiplyMatrixVector(const double matrix[9], const cmsCIEXYZ& in, double out[3]) {
       out[0] = matrix[0] * in.X + matrix[1] * in.Y + matrix[2] * in.Z;
       out[1] = matrix[3] * in.X + matrix[4] * in.Y + matrix[5] * in.Z;
       out[2] = matrix[6] * in.X + matrix[7] * in.Y + matrix[8] * in.Z;
     }
 
-    // Recover the measured colorimetry: the ICC tags are relative to the D50
-    // PCS, and chad records the adaptation that was applied on the way there.
-    // Undoing it maps colorants and white point back to the real white.
-    cmsCIEXYZ unAdapt(const double chadInverse[9], const cmsCIEXYZ& tagged) {
+    // Move a tagged PCS value into the frame the colorants end up in.
+    cmsCIEXYZ applyFrame(const double frame[9], const cmsCIEXYZ& tagged) {
       double xyz[3];
-      multiplyMatrixVector(chadInverse, tagged, xyz);
+      multiplyMatrixVector(frame, tagged, xyz);
       return {.X = xyz[0], .Y = xyz[1], .Z = xyz[2]};
     }
 
@@ -139,9 +148,9 @@ namespace umbriel {
     // PanelTransfer carries the encode curve, so sampled kinds are inverted
     // numerically here and the parser inverts back on read.
     std::vector<float> decodeFromEncode(const PanelTransfer& transfer) {
-      std::vector<float> decode(kCurveSamples);
-      for (size_t index = 0; index < kCurveSamples; ++index) {
-        const float encoded = static_cast<float>(index) / static_cast<float>(kCurveSamples - 1);
+      std::vector<float> decode(color_detail::kCurveSamples);
+      for (size_t index = 0; index < color_detail::kCurveSamples; ++index) {
+        const float encoded = static_cast<float>(index) / static_cast<float>(color_detail::kCurveSamples - 1);
         float low = 0.0F;
         float high = 1.0F;
         for (int step = 0; step < 24; ++step) {
@@ -190,6 +199,10 @@ namespace umbriel {
       result.error = "profile is too large";
       return result;
     }
+    if (const std::string structureError = color_detail::iccStructureError(data); !structureError.empty()) {
+      result.error = structureError;
+      return result;
+    }
     ProfilePtr profile(cmsOpenProfileFromMem(data.data(), static_cast<cmsUInt32Number>(data.size())));
     if (!profile) {
       result.error = "not a readable ICC profile";
@@ -233,23 +246,53 @@ namespace umbriel {
       return result;
     }
 
-    // chad is an s15Fixed16 3x3 that lcms2 hands back as 9 doubles (validated
-    // by the chad round-trip unit).
-    double chadInverse[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    // Colorants and white must end up in one frame. The colorant tags are D50
+    // PCS-relative; chad records the adaptation applied on the way there, so
+    // chad^-1 recovers the measured colorimetry. The white is derived as the
+    // image of (1,1,1) under the colorant matrix in that same frame — the
+    // colorant sum — which stays correct whatever wtpt claims (a measured wtpt
+    // beside chad would otherwise be un-adapted twice).
+    double frame[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    bool frameFromChad = false;
     if (const auto* chad = static_cast<const double*>(cmsReadTag(profile.get(), cmsSigChromaticAdaptationTag))) {
       double chadMatrix[9];
       std::copy_n(chad, 9, chadMatrix);
-      if (!invert3x3(chadMatrix, chadInverse)) {
+      if (color_detail::invert3x3(chadMatrix, frame)) {
+        frameFromChad = true;
+      } else {
         result.warnings.push_back("ignoring a singular chad tag");
-        std::fill_n(chadInverse, 9, 0.0);
-        chadInverse[0] = chadInverse[4] = chadInverse[8] = 1.0;
+      }
+    }
+    if (!frameFromChad) {
+      // Without a usable chad the colorants are D50-relative by specification.
+      // When wtpt declares a measured white that is not D50 (the layout v2
+      // measurement suites emit), adapt the colorants to it explicitly so the
+      // measured colorimetry is what gets reported.
+      const double d50[3] = {0.9642, 1.0, 0.8249};
+      const double wtptSum = whitePoint->X + whitePoint->Y + whitePoint->Z;
+      if (std::isfinite(wtptSum) && std::abs(wtptSum) > 1e-9 && whitePoint->Y > 0.0) {
+        const double wtptXyX = whitePoint->X / wtptSum;
+        const double wtptXyY = whitePoint->Y / wtptSum;
+        if (std::abs(wtptXyX - 0.3457) > 0.001 || std::abs(wtptXyY - 0.3585) > 0.001) {
+          const double measuredWhite[3] = {
+              whitePoint->X / whitePoint->Y,
+              1.0,
+              whitePoint->Z / whitePoint->Y,
+          };
+          color_detail::bradfordAdapt(d50, measuredWhite, frame);
+        }
       }
     }
 
-    const cmsCIEXYZ realRed = unAdapt(chadInverse, *red);
-    const cmsCIEXYZ realGreen = unAdapt(chadInverse, *green);
-    const cmsCIEXYZ realBlue = unAdapt(chadInverse, *blue);
-    const cmsCIEXYZ realWhite = unAdapt(chadInverse, *whitePoint);
+    const cmsCIEXYZ taggedSum{
+        .X = red->X + green->X + blue->X,
+        .Y = red->Y + green->Y + blue->Y,
+        .Z = red->Z + green->Z + blue->Z,
+    };
+    const cmsCIEXYZ realRed = applyFrame(frame, *red);
+    const cmsCIEXYZ realGreen = applyFrame(frame, *green);
+    const cmsCIEXYZ realBlue = applyFrame(frame, *blue);
+    const cmsCIEXYZ realWhite = applyFrame(frame, taggedSum);
 
     PanelColorimetry panel{
         .primaries =
@@ -265,6 +308,20 @@ namespace umbriel {
     panel.white[0] = panel.primaries.white.x;
     panel.white[1] = panel.primaries.white.y;
 
+    // A collapsed colorant triangle cannot anchor a gamut mapping and would
+    // send singular matrices into the transform builder. Degeneracy lives in
+    // the XYZ colorants (a zero-sum colorant is a zero column), so span them
+    // as a matrix and require it to be invertible alongside the hull check.
+    // Singularity is transpose-invariant, so the storage order is irrelevant.
+    const double colorants[9] = {
+        realRed.X, realRed.Y, realRed.Z, realGreen.X, realGreen.Y, realGreen.Z, realBlue.X, realBlue.Y, realBlue.Z,
+    };
+    double colorantInverse[9];
+    if (!validDisplayPrimaries(panel.primaries) || !color_detail::invert3x3(colorants, colorantInverse)) {
+      result.error = "degenerate ICC primaries (the colorants do not span a gamut)";
+      return result;
+    }
+
     const auto* redTrc = static_cast<const cmsToneCurve*>(cmsReadTag(profile.get(), cmsSigRedTRCTag));
     const auto* greenTrc = static_cast<const cmsToneCurve*>(cmsReadTag(profile.get(), cmsSigGreenTRCTag));
     const auto* blueTrc = static_cast<const cmsToneCurve*>(cmsReadTag(profile.get(), cmsSigBlueTRCTag));
@@ -273,8 +330,10 @@ namespace umbriel {
       return result;
     }
 
-    const std::vector<float> redDecode = evaluateCurve(redTrc);
-    if (!sameCurve(redDecode, evaluateCurve(greenTrc)) || !sameCurve(redDecode, evaluateCurve(blueTrc))) {
+    const std::vector<float> redDecode = evaluateCurve(redTrc, result.warnings);
+    std::vector<std::string> channelNotes;
+    if (!sameCurve(redDecode, evaluateCurve(greenTrc, channelNotes))
+        || !sameCurve(redDecode, evaluateCurve(blueTrc, channelNotes))) {
       result.warnings.push_back("per-channel TRCs differ; using the red channel curve");
     }
 

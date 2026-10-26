@@ -1,6 +1,7 @@
 #include "server/ipc_commands.h"
 
 #include "check.h"
+#include "server/color_description.h"
 
 #include <cstdio>
 #include <limits>
@@ -243,6 +244,19 @@ UMBRIEL_TEST(colorHumanLabelsFittedPowerTransferForSurfaces) {
   });
   const std::string out = captureHumanOutput(*spec, payload);
   CHECK(out.contains("power 1.8"));
+  CHECK(!out.contains("unspecified"));
+}
+
+UMBRIEL_TEST(surfaceTransferLabelSeparatesNamedPowerAndBare) {
+  CHECK(umbriel::surfaceTransferLabel(nullptr) == "none");
+  umbriel::ColorDescription named{};
+  named.data.tf_named = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
+  CHECK(umbriel::surfaceTransferLabel(&named) == "gamma 2.2");
+  umbriel::ColorDescription powered{};
+  powered.tfPower = 1.8F;
+  CHECK(umbriel::surfaceTransferLabel(&powered) == "power 1.8");
+  umbriel::ColorDescription bare{};
+  CHECK(umbriel::surfaceTransferLabel(&bare) == "unspecified");
 }
 
 UMBRIEL_TEST(parsesOutputCreateNameOnly) {

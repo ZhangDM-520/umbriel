@@ -59,7 +59,7 @@ namespace umbriel {
       const wlr_output_image_description* outputDescription, float effectiveSdrWhite, bool automaticHdrAvailable = false
   );
 
-  // Characterized-panel override for output descriptions (umbriel#574). While
+  // Characterized-panel override for output descriptions. While
   // an ICC/EDID characterization is active the description reflects the
   // panel's real colorimetry (custom primaries) so tagged clients convert
   // accurately — their pixels can change even under sdr_gamut = "native" —

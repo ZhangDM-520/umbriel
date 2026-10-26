@@ -2,7 +2,7 @@
 # A real ICC characterization drives the SDR gamut policy end to end: panel
 # fields and custom-preferred descriptions on the wire, the exact profile bytes
 # through get_information's icc_file, edid inert on headless, and the create_icc
-# contract (ready, graceful failure, information denial, bad_size). The pixel
+# contract (ready, graceful failure, information denial, bad_size, bad_fd). The pixel
 # pin is the feature's point: "native" stays bit-identical while "srgb" maps
 # untagged red into the profiled wide gamut.
 set -euo pipefail
@@ -18,84 +18,42 @@ readonly DUMP="$RUNTIME/icc-dump"
 readonly SHOT="$RUNTIME/color-profile.png"
 
 # A matrix-shaper ICC v2 display profile built byte for byte at check time (no
-# fixture files): Display-P3-like colorants with a gamma 1.8 TRC — wide enough
-# to desaturate pure red under "srgb", far enough from any named curve for the
-# power-fit path. The truncated and wrong-version copies drive the graceful
-# create_icc failure contract.
-python3 - "$PROFILE" <<'PY'
-import struct
+# fixture files), from the shared generator: Display-P3-like colorants with a
+# gamma 1.8 TRC — wide enough to desaturate pure red under "srgb", far enough
+# from any named curve for the power-fit path. The generator prints the
+# colorants it wrote so checks can assert a round-trip against its own values
+# instead of restating them. The truncated and wrong-version copies drive the
+# graceful create_icc failure contract.
+read -r -a FIXTURE_XY <<<"$(write_icc_matrix_profile "$PROFILE")"
+head -c 200 "$PROFILE" > "$TRUNCATED"
+python3 - "$PROFILE" "$WRONG_VERSION" <<'PY'
 import sys
 
-
-def s15(value):
-    return struct.pack('>i', round(value * 65536))
-
-
-def xyz(x, y):
-    return (x / y, 1.0, (1.0 - x - y) / y)
-
-
-primaries = {
-    'rXYZ': (0.680, 0.320),
-    'gXYZ': (0.265, 0.690),
-    'bXYZ': (0.150, 0.060),
-    'wtpt': (0.3127, 0.3290),
-}
-blobs = {}
-for name, (x, y) in primaries.items():
-    X, Y, Z = xyz(x, y)
-    blobs[name.encode()] = b'XYZ ' + b'\0' * 4 + s15(X) + s15(Y) + s15(Z)
-curve = b'curv' + b'\0' * 4 + struct.pack('>I', 1) + struct.pack('>H', round(1.8 * 256))
-for name in ('rTRC', 'gTRC', 'bTRC'):
-    blobs[name.encode()] = curve
-
-order = sorted(blobs)
-unique = []
-offsets = {}
-cursor = 128 + 4 + 12 * len(order)
-for name in order:
-    blob = blobs[name]
-    if blob not in unique:
-        unique.append(blob)
-        offsets[blob] = cursor
-        cursor += len(blob)
-        cursor += (-cursor) % 4
-
-header = bytearray(128)
-struct.pack_into('>I', header, 0, cursor)
-header[4:8] = b'lcms'
-struct.pack_into('>I', header, 8, 0x02400000)
-header[12:16] = b'mntr'
-header[16:20] = b'RGB '
-header[20:24] = b'XYZ '
-header[36:40] = b'acsp'
-header[40:44] = b'APPL'
-header[68:80] = s15(0.9642) + s15(1.0) + s15(0.8249)
-header[80:84] = b'lcms'
-
-out = bytearray(header)
-out += struct.pack('>I', len(order))
-for name in order:
-    blob = blobs[name]
-    out += name + struct.pack('>II', offsets[blob], len(blob))
-for blob in unique:
-    out += blob
-    out += b'\0' * ((-len(out)) % 4)
-assert len(out) == cursor
-
-path = sys.argv[1]
-with open(path, 'wb') as handle:
-    handle.write(out)
-with open(path + '.truncated', 'wb') as handle:
-    handle.write(out[:200])
-with open(path + '.wrongversion', 'wb') as handle:
-    mutated = bytearray(out)
-    mutated[8] = 3
-    handle.write(mutated)
+mutated = bytearray(open(sys.argv[1], 'rb').read())
+mutated[8] = 3
+open(sys.argv[2], 'wb').write(mutated)
 PY
 
 readonly ICC_SIZE=$(wc -c < "$PROFILE")
 readonly ICC_HEAD=$(od -An -tx1 -N8 "$PROFILE" | tr -d ' \n')
+
+# The untagged phase runs a backgrounded client fed through a FIFO. Any exit
+# between starting it and the phase's own teardown must still reap the client
+# and close the FIFO writer, so an induced failure leaves nothing behind.
+client_pid=
+CLIENT_FD=
+cleanup() {
+  if [[ -n ${CLIENT_FD:-} ]]; then
+    { exec {CLIENT_FD}>&-; } 2>/dev/null || true
+    CLIENT_FD=
+  fi
+  if [[ -n ${client_pid:-} ]] && kill -0 "$client_pid" 2>/dev/null; then
+    kill -TERM "$client_pid" 2>/dev/null || true
+    wait "$client_pid" 2>/dev/null || true
+  fi
+  client_pid=
+}
+trap cleanup EXIT
 
 write_config() {
   printf '%s\n\n[animation]\nenabled = false\n[output.HEADLESS-1]\n%s\n' "$BASELINE" "$1" > "$UMBRIEL_CONFIG"
@@ -115,19 +73,28 @@ fields_are() {
     ' > /dev/null
 }
 
-# Fully saturated untagged red, sampled where a fullscreen surface is bare.
+# Fully saturated untagged red, sampled at the center the captured output
+# actually has, so the pin does not assume one headless mode size.
 sample_red() {
-  local red green blue
+  local red green blue size width height x y
   for _ in $(seq 40); do
     grim "$SHOT"
-    read -r red green blue < <("$UMBRIEL_PIXEL_PROBE" "$SHOT" pixel 640 360)
+    size=$("$UMBRIEL_PIXEL_PROBE" "$SHOT" size)
+    width=${size%x*}
+    height=${size#*x}
+    x=$((width / 2))
+    y=$((height / 2))
+    read -r red green blue < <("$UMBRIEL_PIXEL_PROBE" "$SHOT" pixel "$x" "$y")
     if [[ $1 == pass-through ]]; then
       if ((red >= 253 && green <= 2 && blue <= 2)); then
         echo "$red $green $blue"
         return 0
       fi
     else
-      if ((red <= 240 || green >= 12 || blue >= 12)); then
+      # The mapped band brackets the measured desaturated red (229 38 27): red
+      # stays dominant but below pass-through while green and blue rise above
+      # their pass-through floor. A blank or black frame matches none of it.
+      if ((red >= 200 && red <= 240 && green >= 12 && blue >= 12)); then
         echo "$red $green $blue"
         return 0
       fi
@@ -190,22 +157,25 @@ fi
 assert_pass_through 'profile with native gamut'
 
 # Output and preferred descriptions carry the panel's custom primaries and the
-# exact profile bytes on icc_file.
+# exact profile bytes on icc_file. The primaries assertion is a round-trip
+# contract against the generator's own colorants (the daemon must report the
+# file as written); the parser math itself is pinned by tests/unit/colorimetry.cpp.
 INFO_LOG="$RUNTIME/color-profile-info.log"
 if ! UMBRIEL_ICC_DUMP="$DUMP" "$CLIENT" v1 > "$INFO_LOG" 2>&1; then
   echo "the color feedback client did not collect output/preferred descriptions: $(cat "$INFO_LOG")"
   exit 1
 fi
-if ! jq -se --argjson size "$ICC_SIZE" --arg head "$ICC_HEAD" '
+if ! jq -se --argjson size "$ICC_SIZE" --arg head "$ICC_HEAD" --arg ex "${FIXTURE_XY[*]}" '
   def near($a; $b): (($a - $b) | if . < 0 then -. else . end) <= 30;
-  . as $log
+  ($ex | split(" ") | map(tonumber * 1000000)) as $want
+  | . as $log
   | ["output", "preferred"] | all(. as $source
     | ([$log[] | select(.event == "description" and .source == $source)] | last) as $d
     | $d.tf == 2 and $d.primaries == 0 and $d.icc_size == $size and $d.icc_head == $head
-      and near($d.primaries_xy[0]; 680000) and near($d.primaries_xy[1]; 320000)
-      and near($d.primaries_xy[2]; 265000) and near($d.primaries_xy[3]; 690000)
-      and near($d.primaries_xy[4]; 150000) and near($d.primaries_xy[5]; 60000)
-      and near($d.primaries_xy[6]; 312700) and near($d.primaries_xy[7]; 329000))
+      and near($d.primaries_xy[0]; $want[0]) and near($d.primaries_xy[1]; $want[1])
+      and near($d.primaries_xy[2]; $want[2]) and near($d.primaries_xy[3]; $want[3])
+      and near($d.primaries_xy[4]; $want[4]) and near($d.primaries_xy[5]; $want[5])
+      and near($d.primaries_xy[6]; $want[6]) and near($d.primaries_xy[7]; $want[7]))
 ' "$INFO_LOG" > /dev/null; then
   echo "characterized descriptions lacked custom primaries or icc_file bytes: $(cat "$INFO_LOG")"
   exit 1
@@ -238,6 +208,8 @@ assert_pass_through 'edid fallback'
 kill -TERM "$client_pid"
 wait "$client_pid" 2>/dev/null || true
 exec {CLIENT_FD}>&-
+client_pid=
+CLIENT_FD=
 "$UMBRIEL" settle > /dev/null
 
 # --- create_icc wire contract ----------------------------------------------
@@ -282,6 +254,19 @@ if [[ $rc != 2 ]] || ! grep -Fq '{"event":"icc_bad_size"' "$RUNTIME/icc-oversize
 fi
 if ! "$UMBRIEL" color --json | jq -e '.color_manager == true' > /dev/null; then
   echo "the compositor did not survive the bad_size client: $( "$UMBRIEL" color --json)"
+  exit 1
+fi
+
+# bad_fd is the request-contract error for an fd that is not a seekable,
+# readable regular file: a directory fd must be refused at set_icc_file
+# instead of surfacing later as a read failure.
+rc=$(run_icc_mode nonregular "$PROFILE" nonreg)
+if [[ $rc != 2 ]] || ! grep -Fq '{"event":"icc_bad_fd"' "$RUNTIME/icc-nonregular-nonreg.log"; then
+  echo "directory fd did not raise bad_fd for the client: rc=$rc $(cat "$RUNTIME/icc-nonregular-nonreg.log")"
+  exit 1
+fi
+if ! "$UMBRIEL" color --json | jq -e '.color_manager == true' > /dev/null; then
+  echo "the compositor did not survive the bad_fd client: $( "$UMBRIEL" color --json)"
   exit 1
 fi
 

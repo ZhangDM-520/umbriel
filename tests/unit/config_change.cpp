@@ -656,6 +656,27 @@ UMBRIEL_TEST(outputColorProfileReloadOnlyRefreshesOutputState) {
   CHECK(!ConfigEffects::between(after, after).any());
 }
 
+UMBRIEL_TEST(aRereadProfileRuleWithUnchangedFileChangesNothing) {
+  // A file profile's rule records the file identity, so re-parsing the same
+  // file must not re-apply output state and risk a flicker.
+  Config before;
+  OutputRule original;
+  original.name = "HEADLESS-1";
+  original.colorProfile = "/profiles/panel.icc?mtime=1000000000";
+  before.outputs.push_back(original);
+
+  const Config after = before;
+  CHECK(!ConfigChange::between(before, after).any());
+  CHECK(!ConfigEffects::between(before, after).any());
+
+  Config edited = before;
+  edited.outputs[0].colorProfile = "/profiles/panel.icc?mtime=1000000060";
+  CHECK(ConfigChange::between(before, edited).outputs);
+  const ConfigEffects changed = ConfigEffects::between(before, edited);
+  CHECK(changed.outputState);
+  CHECK_EQ(changed.summary(), std::string{"output state"});
+}
+
 UMBRIEL_TEST(outputSdrGamutReloadOnlyRefreshesOutputState) {
   Config before;
   OutputRule original;

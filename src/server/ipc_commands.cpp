@@ -435,21 +435,6 @@ namespace umbriel {
       }
     }
 
-    // Surface transfer label: a fitted power curve (tfPower) has no named
-    // protocol value. Report the fitted exponent instead.
-    std::string surfaceTransferLabel(const ColorDescription* description) {
-      if (description == nullptr) {
-        return "none";
-      }
-      if (description->data.tf_named != 0) {
-        return protocolTransferFunctionName(description->data.tf_named);
-      }
-      if (description->tfPower > 0.0F) {
-        return std::format("power {:.4g}", description->tfPower);
-      }
-      return "none";
-    }
-
     const char* protocolPrimariesName(uint32_t value) {
       switch (value) {
       case 0:
@@ -548,14 +533,18 @@ namespace umbriel {
             "  color profile: {}, SDR gamut: {}", output.value("color_profile", "none"),
             output.value("sdr_gamut", "native")
         );
-        const auto& panelPrimaries = output.at("panel_primaries");
-        const std::string panelTransfer =
-            output.at("panel_transfer").is_string() ? output.at("panel_transfer").get<std::string>() : "none";
-        if (panelPrimaries.is_object()) {
-          const auto& red = panelPrimaries.at("red");
-          const auto& green = panelPrimaries.at("green");
-          const auto& blue = panelPrimaries.at("blue");
-          const auto& white = panelPrimaries.at("white");
+        // A daemon that predates the characterization fields omits these keys,
+        // so the printer degrades to the inert wording instead of throwing.
+        const auto panelPrimaries = output.find("panel_primaries");
+        const auto panelTransferValue = output.find("panel_transfer");
+        const std::string panelTransfer = panelTransferValue != output.end() && panelTransferValue->is_string()
+            ? panelTransferValue->get<std::string>()
+            : "none";
+        if (panelPrimaries != output.end() && panelPrimaries->is_object()) {
+          const auto& red = panelPrimaries->at("red");
+          const auto& green = panelPrimaries->at("green");
+          const auto& blue = panelPrimaries->at("blue");
+          const auto& white = panelPrimaries->at("white");
           std::println(
               "  panel primaries: r {:.4f},{:.4f} g {:.4f},{:.4f} b {:.4f},{:.4f} w {:.4f},{:.4f}; panel transfer: {}",
               red.at("x").get<double>(), red.at("y").get<double>(), green.at("x").get<double>(),
@@ -756,6 +745,23 @@ namespace umbriel {
     }
 
   } // namespace
+
+  // Surface transfer label: a fitted power curve (tfPower) has no named
+  // protocol value. Report the fitted exponent instead. "none" means no
+  // description at all; a description that carries no curve is "unspecified",
+  // which the renderer resolves through the output's SDR transfer policy.
+  std::string surfaceTransferLabel(const ColorDescription* description) {
+    if (description == nullptr) {
+      return "none";
+    }
+    if (description->data.tf_named != 0) {
+      return protocolTransferFunctionName(description->data.tf_named);
+    }
+    if (description->tfPower > 0.0F) {
+      return std::format("power {:.4g}", description->tfPower);
+    }
+    return "unspecified";
+  }
 
   nlohmann::json IpcCommands::windows(Server& server, std::string_view /*arg*/) {
     nlohmann::json windows = nlohmann::json::array();
@@ -1042,7 +1048,7 @@ namespace umbriel {
           {"max_cll", description != nullptr ? description->max_cll : 0.0},
           {"max_fall", description != nullptr ? description->max_fall : 0.0},
       };
-      // Derived panel characterization (umbriel#574): null while inert.
+      // Derived panel characterization: null while inert.
       entry["panel_primaries"] = nullptr;
       entry["panel_transfer"] = nullptr;
       if (panel != nullptr) {

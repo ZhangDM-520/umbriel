@@ -259,12 +259,28 @@ Custom gamma-curve calibration applies only in SDR. Umbriel keeps the client's l
 
 A wide-color-gamut panel reads every signal in its own primaries. Untagged SDR content carries sRGB-encoded values and no tag, so the panel saturates them into its native gamut: reds and greens more vivid than the content, which is why a window that looks right on an sRGB monitor looks wrong here. Compositors fix this by characterizing the display and converting during composition.
 
-`color_profile` accepts `"none"`, `"edid"`, or a path to an ICC profile; characterization priority is the ICC file, then the EDID, then none. The ICC file is the factory measurement and is preferred. EDID colorimetry is derived from the display's own metadata and, in KWin's own caveat, is sometimes wrong. Nested and headless outputs have no EDID, so `color_profile = "edid"` logs a warning and stays inert there, while a file path still works. The characterization describes the panel in SDR mode; it interprets untagged SDR as sRGB and maps it into the panel's colorimetry when asked to.
+`color_profile` accepts `"none"`, `"edid"`, or a path to an ICC profile; characterization priority is the ICC file, then the EDID, then none. The ICC file is the factory measurement and is preferred. EDID colorimetry is derived from the display's own metadata. Nested and headless outputs have no EDID, so `color_profile = "edid"` logs a warning and stays inert there, while a file path still works. The characterization describes the panel in SDR mode; it interprets untagged SDR as sRGB and maps it into the panel's colorimetry when asked to.
+
+Profile paths follow these rules:
+
+- A relative path resolves against the directory of the config file that sets it, include files included.
+- `~` and `~/` expand to `$HOME`, like include paths. No other variable placeholders are expanded.
+- `"none"` and `"edid"` are reserved keywords. A file literally named `edid` (or `none`) must be spelled `./edid` (`./none`) or given as an absolute path.
+- The path must resolve to a readable regular file. Directories, FIFOs, and device files are rejected.
+
+Failures fall back down the characterization chain, never fail the output:
+
+- An invalid value (not `"none"`, `"edid"`, or a string) is ignored with a warning, and the output stays uncharacterized.
+- A path that cannot be resolved to a readable regular file at load time falls back to `"edid"` with a warning.
+- A profile the compositor cannot read at apply time (the file changed, disappeared, or is no longer regular), or an ICC profile it cannot parse, falls back to EDID with a warning. The apply-time read is authoritative: the load-time check is advisory and can be stale.
+- With no usable EDID either, the output stays uncharacterized and gamut mapping stays inactive.
+
+A profile file edit is picked up on the next config reload: the rule records the file's mtime, so the profile is re-read and re-applied. Configured profile files are watched along with the config, so saving one triggers the reload itself. EDID characterization is re-read whenever an output re-applies its state.
 
 `sdr_gamut` decides what happens to untagged SDR while a characterization is active:
 
 - `"native"` (the default) stages no transform at all. Pixels stay bit-identical to an uncharacterized output even with a profile set, so behavior only changes where the user opted in.
-- `"srgb"` interprets untagged SDR as sRGB and maps it into the panel's colorimetry — the oversaturation fix. This is Mutter's `gdctl --color-mode sdr-native` behavior with a factory profile in place of the EDID, the Windows ACM behavior with ICC, and KWin's "sRGB color intensity" at 0%.
+- `"srgb"` interprets untagged SDR as sRGB and maps it into the panel's colorimetry — the oversaturation fix. The mapping is white-preserving (relative): the source white maps to the panel's native white, so switching between `"native"` and `"srgb"` does not change white.
 
 Tagged clients are separate from this policy: whenever a characterization is active, output and preferred color descriptions advertise the panel's real custom primaries under both settings, so applications with explicit color management convert accurately. Their pixels can therefore change as soon as a profile is configured, even under `sdr_gamut = "native"`; untagged content is untouched unless `sdr_gamut = "srgb"` stages the mapping.
 
@@ -272,7 +288,7 @@ ICC import accepts matrix-shaper profiles only. LUT-based profiles (`A2B0`/`B2A0
 
 The characterization applies to SDR-mode composition only. Under HDR the PQ/BT.2020 pipeline, `sdr_white`, and `sdr_transfer` behave exactly as described above. Run `umbriel color` to inspect the resolved `panel_primaries` and `panel_transfer` alongside the configured `color_profile` and `sdr_gamut`.
 
-Building the ICC path requires lcms2 (the `lcms2` meson feature option). Without it, a configured profile path warns and falls back like an unreadable file, and EDID characterization works but advertises no ICC bytes.
+Building ICC support requires lcms2 (the `lcms2` meson feature option, which gates both output profile parsing and client ICC evaluation). Without it a configured profile path warns and falls back like an unreadable file, EDID characterization works but advertises no ICC bytes, and clients cannot create ICC-based image descriptions.
 
 #### Client ICC descriptions
 

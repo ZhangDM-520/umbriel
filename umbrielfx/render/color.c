@@ -290,29 +290,50 @@ static size_t color_transform_compose_collect(
   return count;
 }
 
+static bool fail_lut_fold_alloc_for_test = false;
+
+// Forced allocation failure lets the compose cleanup path run without a real
+// out-of-memory condition. Declared here because the hook exists only for tests
+// and the production header stays free of it.
+void color_transform_fail_lut_fold_alloc_for_test(bool fail);
+
+void color_transform_fail_lut_fold_alloc_for_test(bool fail) {
+  fail_lut_fold_alloc_for_test = fail;
+}
+
+// Sample one table row at a normalized position, linearly the way the shaders
+// sample a LUT.
+static double lut_row_eval(const uint16_t* row, size_t dim, double x) {
+  const double position = x * (double)(dim - 1);
+  const size_t lower = (size_t)position;
+  const size_t upper = lower + 1 < dim ? lower + 1 : dim - 1;
+  const double a = row[lower] / 65535.0;
+  const double b = row[upper] / 65535.0;
+  return a + (b - a) * (position - (double)lower);
+}
+
 // Two 3x1D LUTs in series (a baked panel-TRC curve followed by a gamma-control
 // ramp) fold into one table per channel: folded[i] = second(first[i]), sampled
 // linearly the way the shaders sample a LUT. Consumers downstream accept a
 // single LUT stage, so without the fold a gamma ramp would invalidate a
-// composed transform instead of composing with it.
+// composed transform instead of composing with it. The folded table samples
+// both rows on the finer of the two grids, so a coarse curve never resamples
+// away the finer one's knots and every finer-grid node holds the exact chain.
 static struct wlr_color_transform*
 color_transform_fold_lut_pair(struct wlr_color_transform_lut_3x1d* first, struct wlr_color_transform_lut_3x1d* second) {
-  const size_t dim = first->dim;
-  uint16_t* folded = calloc(dim * 3, sizeof(uint16_t));
+  const size_t dim = first->dim > second->dim ? first->dim : second->dim;
+  uint16_t* folded = fail_lut_fold_alloc_for_test ? NULL : calloc(dim * 3, sizeof(uint16_t));
   if (folded == NULL) {
     return NULL;
   }
   for (size_t channel = 0; channel < 3; channel++) {
-    const uint16_t* first_row = &first->lut_3x1d[channel * dim];
+    const uint16_t* first_row = &first->lut_3x1d[channel * first->dim];
     const uint16_t* second_row = &second->lut_3x1d[channel * second->dim];
     uint16_t* out_row = &folded[channel * dim];
     for (size_t i = 0; i < dim; i++) {
-      const double position = first_row[i] / 65535.0 * (double)(second->dim - 1);
-      const size_t lower = (size_t)position;
-      const size_t upper = lower + 1 < second->dim ? lower + 1 : second->dim - 1;
-      const double a = second_row[lower] / 65535.0;
-      const double b = second_row[upper] / 65535.0;
-      out_row[i] = (uint16_t)lround((a + (b - a) * (position - (double)lower)) * 65535.0);
+      const double x = dim > 1 ? (double)i / (double)(dim - 1) : 0.0;
+      const double intermediate = lut_row_eval(first_row, first->dim, x);
+      out_row[i] = (uint16_t)lround(lut_row_eval(second_row, second->dim, intermediate) * 65535.0);
     }
   }
   struct wlr_color_transform* result = wlr_color_transform_init_lut_3x1d(dim, folded, &folded[dim], &folded[dim * 2]);
@@ -350,15 +371,19 @@ bool color_transform_compose(struct wlr_color_transform** result, struct wlr_col
           color_transform_lut_3x1d_from_base(result_transforms[composed_len - 1]),
           color_transform_lut_3x1d_from_base(current)
       );
-      wlr_color_transform_unref(result_transforms[composed_len - 1]);
-      wlr_color_transform_unref(current);
       if (folded == NULL) {
+        // The array keeps owning the fold's first input so cleanup releases it
+        // exactly once; `current` sits outside the kept prefix and is released
+        // here.
+        wlr_color_transform_unref(current);
         for (size_t j = i + 1; j < result_len; j++) {
           wlr_color_transform_unref(result_transforms[j]);
         }
         result_len = composed_len;
         goto cleanup_transforms;
       }
+      wlr_color_transform_unref(result_transforms[composed_len - 1]);
+      wlr_color_transform_unref(current);
       result_transforms[composed_len - 1] = folded;
       continue;
     }

@@ -39,9 +39,9 @@ unit_tests = [
   ['output-gamma-transition', ['unit/output_gamma_transition.cpp'], []],
   ['hdr-metadata', ['unit/hdr_metadata.cpp'], [umbriel_core_dep]],
   # Client-ICC cases skip at runtime when lcms2 is absent at build time.
-  ['color-description', ['unit/color_description.cpp'], [umbriel_core_dep] + (lcms2_dep.found() ? [lcms2_dep] : [])],
+  ['color-description', ['unit/color_description.cpp'], [umbriel_core_dep]],
   # ICC cases skip at runtime when lcms2 is absent at build time.
-  ['colorimetry', ['unit/colorimetry.cpp'], [umbriel_core_dep] + (lcms2_dep.found() ? [lcms2_dep] : [])],
+  ['colorimetry', ['unit/colorimetry.cpp'], [umbriel_core_dep]],
   ['hdr-format', ['unit/hdr_format.cpp'], []],
   ['sdr-format', ['unit/sdr_format.cpp'], []],
   ['layout-struts', ['unit/layout_struts.cpp'], []],

@@ -2,9 +2,11 @@
 
 #include "check.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <print>
 #include <string>
 #include <utility>
@@ -471,7 +473,7 @@ UMBRIEL_TEST(clientIccDescriptionsFitColorimetryAndKeepExactBytes) {
     CHECK(closeTo(description.customPrimaries.white.x, 0.3127, 0.005));
     // The client's exact bytes stay on the description for identity and
     // change detection; the create contract denies get_information, so no
-    // icc_file is ever sent for this description (live-pinned in wave 3).
+    // icc_file is ever sent for this description.
     CHECK(description.iccProfile != nullptr);
     if (description.iccProfile != nullptr) {
       CHECK(*description.iccProfile == bytes);
@@ -635,6 +637,87 @@ UMBRIEL_TEST(bufferTransferFunctionsMapPowerFitsToNamedCurves) {
   // No transfer characteristic at all stays unspecified for the renderer.
   description.tfPower = 0.0F;
   CHECK(umbriel::bufferTransferFunction(description) == static_cast<wlr_color_transfer_function>(0));
+}
+
+UMBRIEL_TEST(clientIccDegeneratePrimariesFailGracefully) {
+#if !UMBRIEL_HAS_LCMS2
+  std::println("skip: built without lcms2");
+#else
+  // A collapsed colorant triangle must fail the description gracefully and
+  // never reach the matrix math downstream.
+  cmsToneCurve* curve = cmsBuildGamma(nullptr, 2.2);
+  CHECK(curve != nullptr);
+  if (curve == nullptr) {
+    return;
+  }
+  cmsToneCurve* curves[3]{curve, curve, curve};
+  const cmsCIExyY white = {.x = 0.3127, .y = 0.329, .Y = 1.0};
+  const cmsCIExyYTRIPLE primaries{
+      .Red = {.x = 0.64, .y = 0.33, .Y = 1.0},
+      .Green = {.x = 0.30, .y = 0.60, .Y = 1.0},
+      .Blue = {.x = 0.15, .y = 0.06, .Y = 1.0},
+  };
+  cmsHPROFILE profile = cmsCreateRGBProfileTHR(nullptr, &white, &primaries, curves);
+  cmsFreeToneCurve(curve);
+  CHECK(profile != nullptr);
+  if (profile == nullptr) {
+    return;
+  }
+  // cmsCreateRGBProfileTHR refuses singular colorants outright, so collapse
+  // an accepted profile's colorants at the byte level instead.
+  cmsUInt8Number redColorant[64];
+  const cmsUInt32Number colorantSize = cmsReadRawTag(profile, cmsSigRedColorantTag, redColorant, sizeof(redColorant));
+  CHECK(colorantSize >= 20);
+  CHECK(cmsWriteRawTag(profile, cmsSigGreenColorantTag, redColorant, colorantSize));
+  CHECK(cmsWriteRawTag(profile, cmsSigBlueColorantTag, redColorant, colorantSize));
+  const std::vector<uint8_t> bytes = saveProfile(profile);
+  cmsCloseProfile(profile);
+  CHECK(!bytes.empty());
+
+  const umbriel::ClientIccDescription result = umbriel::clientIccDescription(bytes);
+  CHECK(!result.description.has_value());
+  CHECK(!result.error.empty());
+#endif
+}
+
+UMBRIEL_TEST(clientIccMalformedBytesFailGracefully) {
+#if !UMBRIEL_HAS_LCMS2
+  std::println("skip: built without lcms2");
+#else
+  // Deterministic malformed inputs take the failed path with an error, never
+  // a crash or a half-formed description.
+  cmsToneCurve* curve = cmsBuildGamma(nullptr, 2.2);
+  CHECK(curve != nullptr);
+  const std::vector<uint8_t> base = matrixShaperProfile({curve, curve, curve});
+  cmsFreeToneCurve(curve);
+  CHECK(!base.empty());
+
+  const auto rejects = [&](const std::vector<uint8_t>& bytes, const char* what) {
+    const umbriel::ClientIccDescription result = umbriel::clientIccDescription(bytes);
+    if (result.description.has_value() || result.error.empty()) {
+      umbriel::test::reportFailure(__FILE__, __LINE__, std::format("client ICC accepted malformed input: {}", what));
+    }
+  };
+
+  for (const size_t cut : {size_t{0}, size_t{64}, size_t{127}, base.size() / 2, base.size() - 1}) {
+    rejects(std::vector<uint8_t>(base.begin(), base.begin() + static_cast<std::ptrdiff_t>(cut)), "truncated");
+  }
+  {
+    std::vector<uint8_t> bytes = base;
+    std::fill(bytes.begin() + 128, bytes.begin() + 132, 0xFF);
+    rejects(bytes, "oversized tag count");
+  }
+  {
+    std::vector<uint8_t> bytes = base;
+    std::fill(bytes.begin() + 132, bytes.begin() + 168, 0xFF);
+    rejects(bytes, "flipped tag offsets");
+  }
+  {
+    std::vector<uint8_t> bytes = base;
+    std::fill(bytes.begin() + 200, bytes.begin() + 232, 0);
+    rejects(bytes, "embedded NUL run");
+  }
+#endif
 }
 
 int main() { return RUN_TESTS(); }

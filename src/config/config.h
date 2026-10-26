@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -331,9 +332,12 @@ namespace umbriel {
     float sdrWhite = 203.0F;
     SdrTransfer sdrTransfer = SdrTransfer::Gamma22;
     // Panel characterization for SDR gamut limiting: "none", "edid", or a path
-    // to an ICC matrix-shaper display profile. Parsed at apply time; the config
-    // only checks that a path is readable.
+    // to an ICC matrix-shaper display profile. The bytes are parsed at apply
+    // time and an unreadable path falls back to "edid". The mtime stamps the
+    // rule so a reload of an edited profile re-reads it (change detection and
+    // the characterization cache both key on it).
     std::string colorProfile = "none";
+    std::int64_t colorProfileMtime = 0;
     SdrGamut sdrGamut = SdrGamut::Native;
     std::optional<std::string> screenEffect; // "off" disables the default
     // Render bit depth for SDR output: 8 (default) or 10 for 10-bit SDR.

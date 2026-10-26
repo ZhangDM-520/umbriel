@@ -127,13 +127,13 @@ pangocairo_dep = dependency('pangocairo')
 libdrm_dep = dependency('libdrm', version: '>=2.4.129')
 libdisplay_info_dep = dependency('libdisplay-info', version: '>=0.3.0')
 libudev_dep = dependency('libudev', required: false)
-# ICC profile characterization for output gamut limiting (umbriel#574). Mirrors
-# umbrielfx's optional lcms2: without it the ICC path compiles its inert
-# fallback and `color_profile = "<path>"` warns and stays unused.
+# Optional ICC support: this single lookup feeds both the output characterization
+# and umbrielfx's client-ICC evaluation, so -Dlcms2=disabled builds an lcms2-free
+# tree in which both compile their inert fallbacks.
 lcms2_dep = dependency('lcms2', required: get_option('lcms2'))
 add_project_arguments(
   '-DUMBRIEL_HAS_LCMS2=' + lcms2_dep.found().to_int().to_string(),
-  language: 'cpp',
+  language: ['c', 'cpp'],
 )
 # sd-bus reads the systemd-localed keymap a keyboard without XKB config uses.
 libsystemd_dep = dependency('libsystemd', version: '>=243', required: get_option('localed'))

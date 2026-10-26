@@ -39,12 +39,17 @@ extern "C" {
 
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <drm_fourcc.h>
+#include <fcntl.h>
 #include <format>
-#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 #ifdef TRACY_ENABLE
@@ -130,6 +135,16 @@ namespace umbriel {
       }
       kLog.info("output '{}': keeping live mode {}x{}@{}mHz", output.name, mode->width, mode->height, mode->refresh);
       return mode;
+    }
+
+    // Content stamp mixed into the characterization key: an EDID change must
+    // re-resolve even when the config text is unchanged.
+    std::string edidFingerprint(const std::vector<uint8_t>& blob) {
+      uint64_t hash = 1469598103934665603ULL;
+      for (const uint8_t byte : blob) {
+        hash = (hash ^ byte) * 1099511628211ULL;
+      }
+      return std::to_string(blob.size()) + ":" + std::to_string(hash);
     }
 
 #ifdef TRACY_ENABLE
@@ -477,10 +492,23 @@ namespace umbriel {
                                                                                              : nullptr;
   }
 
+  // Resolves the panel characterization (ICC file, EDID, or none) and builds
+  // the SDR gamut transform from it; the description refresh fires on every
+  // path that leaves the resolved state changed.
   void Output::updateSdrGamutTransform(const OutputRule* rule, bool force) {
     const std::string source = rule != nullptr ? rule->colorProfile : "none";
     const SdrGamut gamut = rule != nullptr ? rule->sdrGamut : SdrGamut::Native;
-    const std::string key = source + "|" + (gamut == SdrGamut::Srgb ? "srgb" : "native");
+    // The key carries the profile file's mtime and the EDID fingerprint, so an
+    // edited profile or a changed EDID re-reads on re-apply without waiting for
+    // anything else to change.
+    std::string key = source
+        + "|"
+        + std::to_string(rule != nullptr ? rule->colorProfileMtime : 0LL)
+        + "|"
+        + (gamut == SdrGamut::Srgb ? "srgb" : "native");
+    if (source != "none") {
+      key += "|" + edidFingerprint(edidBlobForOutput(m_output));
+    }
     if (!force && m_sdrGamutResolved && m_sdrGamutSource == key) {
       return;
     }
@@ -501,32 +529,54 @@ namespace umbriel {
     // down that chain instead of failing the config (never fail the output).
     std::optional<PanelColorimetry> panel;
     if (source != "edid") {
-      constexpr std::streamoff kMaxProfileBytes = 32 * 1024 * 1024;
-      std::ifstream file(source, std::ios::binary | std::ios::ate);
-      const std::streamoff size = file ? static_cast<std::streamoff>(file.tellg()) : 0;
+      // The apply-time read is authoritative: the load-time check only rejects
+      // obviously unusable paths, and the file can have changed or disappeared
+      // since. O_NONBLOCK plus the regular-file check keeps a FIFO or device
+      // path from blocking the compositor thread.
+      constexpr size_t kMaxProfileBytes = 32 * 1024 * 1024;
+      const std::string profilePath = source;
       std::vector<uint8_t> bytes;
-      if (size <= 0 || size > kMaxProfileBytes) {
-        kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, source);
+      const int fd = open(profilePath.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+      if (fd < 0) {
+        kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, profilePath);
       } else {
-        bytes.resize(static_cast<size_t>(size));
-        file.seekg(0);
-        if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
-          kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, source);
-          bytes.clear();
+        struct stat metadata{};
+        if (fstat(fd, &metadata) != 0 || !S_ISREG(metadata.st_mode)) {
+          kLog.warn(
+              "output '{}': color profile '{}' must be a readable regular file; falling back to EDID", m_output->name,
+              profilePath
+          );
+        } else if (metadata.st_size <= 0 || static_cast<std::uint64_t>(metadata.st_size) > kMaxProfileBytes) {
+          kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, profilePath);
+        } else {
+          bytes.resize(static_cast<size_t>(metadata.st_size));
+          size_t filled = 0;
+          while (filled < bytes.size()) {
+            const ssize_t count = read(fd, bytes.data() + filled, bytes.size() - filled);
+            if (count <= 0) {
+              bytes.clear();
+              break;
+            }
+            filled += static_cast<size_t>(count);
+          }
+          if (bytes.empty()) {
+            kLog.warn("output '{}': cannot read color profile '{}'; falling back to EDID", m_output->name, profilePath);
+          }
         }
+        close(fd);
       }
       if (!bytes.empty()) {
         IccParse parsed = parseIccProfile(bytes);
         for (const std::string& warning : parsed.warnings) {
-          kLog.warn("output '{}': color profile '{}': {}", m_output->name, source, warning);
+          kLog.warn("output '{}': color profile '{}': {}", m_output->name, profilePath, warning);
         }
         if (parsed.colorimetry) {
           panel = std::move(parsed.colorimetry);
-          // Wave 5: the advertised profile is the file exactly as configured.
+          // The advertised profile is the file exactly as configured.
           m_iccProfile = iccStoreForFileProfile(bytes);
         } else {
           kLog.warn(
-              "output '{}': color profile '{}' rejected ({}); falling back to EDID", m_output->name, source,
+              "output '{}': color profile '{}' rejected ({}); falling back to EDID", m_output->name, profilePath,
               parsed.error
           );
         }

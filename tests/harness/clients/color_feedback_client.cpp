@@ -112,7 +112,7 @@ namespace {
     wp_image_description_info_v1_destroy(information);
     wp_image_description_v1_destroy(description.proxy);
   }
-  // Surfacing, not swallowing (umbriel#574 wave 3): the icc_file fd is read
+  // Surfacing, not swallowing: the icc_file fd is read
   // whole, its size and first bytes ride the description JSON, and the exact
   // bytes land at $UMBRIEL_ICC_DUMP.<source>.<generation> so a check can
   // byte-compare them against the configured profile.
@@ -186,6 +186,28 @@ namespace {
   constexpr wp_image_description_info_v1_listener kInformationListener{
       .done = informationDone,
       .icc_file = informationIcc,
+      .primaries = informationPrimaries,
+      .primaries_named = informationPrimariesNamed,
+      .tf_power = informationTransferPower,
+      .tf_named = informationTransferNamed,
+      .luminances = informationLuminances,
+      .target_primaries = informationTargetPrimaries,
+      .target_luminance = informationTargetLuminance,
+      .target_max_cll = informationMaxCll,
+      .target_max_fall = informationMaxFall,
+  };
+  // Repeated get_information on one description answers with the same data
+  // every time, so the storm counter only needs the done events; the icc_file
+  // fds are the client's to close just like the single-shot paths do.
+  unsigned stormDone = 0;
+  void informationDoneCount(void*, wp_image_description_info_v1* information) {
+    ++stormDone;
+    wp_image_description_info_v1_destroy(information);
+  }
+  void informationDiscardIcc(void*, wp_image_description_info_v1*, int32_t fd, uint32_t) { close(fd); }
+  constexpr wp_image_description_info_v1_listener kCountingListener{
+      .done = informationDoneCount,
+      .icc_file = informationDiscardIcc,
       .primaries = informationPrimaries,
       .primaries_named = informationPrimariesNamed,
       .tf_power = informationTransferPower,
@@ -512,11 +534,161 @@ int main(int argc, char** argv) {
     wl_display_disconnect(state.display);
     return 0;
   }
-  if (argc == 3 && std::strncmp(argv[1], "icc-", 4) == 0) {
-    // create_icc drive (umbriel#574 wave 3): one-shot modes that build a
+  if (argc >= 2 && std::strncmp(argv[1], "icc-", 4) == 0) {
+    // create_icc drive: one-shot modes that build a
     // wp_image_description_creator_icc_v1 from a profile file and report the
     // wire outcome as one JSON line.
     const char* mode = argv[1] + 4;
+    if (std::strcmp(mode, "nonregular") == 0) {
+      // The fd must be a seekable, readable regular file: a directory fd
+      // lseeks fine but cannot be read, so it must be refused at set_icc_file.
+      const int fd = open(".", O_RDONLY | O_DIRECTORY);
+      if (fd < 0) {
+        std::println(stderr, "color-feedback-client: cannot open a directory fd");
+        return 1;
+      }
+      auto* creator = wp_color_manager_v1_create_icc_creator(state.manager);
+      wp_image_description_creator_icc_v1_set_icc_file(creator, fd, 0, 1);
+      close(fd);
+      if (!expectProtocolError(
+              state, &wp_image_description_creator_icc_v1_interface, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD
+          )) {
+        std::println(stderr, "color-feedback-client: the directory fd was not refused with bad_fd");
+        return 1;
+      }
+      std::println(
+          R"({{"event":"icc_bad_fd","code":{}}})",
+          static_cast<uint32_t>(WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD)
+      );
+      wl_display_disconnect(state.display);
+      return 2;
+    }
+    if (std::strcmp(mode, "storm") == 0) {
+      // Repeated get_information on one output description: each answer
+      // advertises the profile through icc_file, so the compositor must not
+      // accumulate descriptors or profile copies across the loop.
+      const int count = argc == 3 ? std::atoi(argv[2]) : 0;
+      if (count <= 0) {
+        std::println(stderr, "color-feedback-client: icc-storm needs a positive request count");
+        return 1;
+      }
+      state.colorOutput = wp_color_manager_v1_get_output(state.manager, state.output);
+      wp_image_description_v1* description = wp_color_management_output_v1_get_image_description(state.colorOutput);
+      DescriptionResult result;
+      wp_image_description_v1_add_listener(description, &kResultListener, &result);
+      while (!result.ready && !result.failed && wl_display_dispatch(state.display) >= 0) {
+      }
+      if (!result.ready) {
+        std::println(stderr, "color-feedback-client: output description was not ready for the icc storm");
+        return 1;
+      }
+      Description sink;
+      for (int request = 0; request < count; ++request) {
+        wp_image_description_info_v1* information = wp_image_description_v1_get_information(description);
+        wp_image_description_info_v1_add_listener(information, &kCountingListener, &sink);
+        if (wl_display_roundtrip(state.display) < 0) {
+          std::println(stderr, "color-feedback-client: the icc storm died at request {}", request);
+          return 1;
+        }
+      }
+      std::println(R"({{"event":"icc_storm","requests":{},"answered":{}}})", count, stormDone);
+      wp_image_description_v1_destroy(description);
+      wl_display_disconnect(state.display);
+      return 0;
+    }
+    if (std::strcmp(mode, "cap-creators") == 0) {
+      // The per-client budget admits four concurrent creators; the fifth
+      // request must be refused instead of staging another profile.
+      std::array<wp_image_description_creator_icc_v1*, 5> creators{};
+      for (auto*& creator : creators) {
+        creator = wp_color_manager_v1_create_icc_creator(state.manager);
+      }
+      if (!expectProtocolError(state, &wp_color_manager_v1_interface, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE)) {
+        std::println(stderr, "color-feedback-client: the fifth concurrent ICC creator was not refused");
+        return 1;
+      }
+      std::println(
+          R"({{"event":"icc_cap_creators","code":{}}})",
+          static_cast<uint32_t>(WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE)
+      );
+      wl_display_disconnect(state.display);
+      return 2;
+    }
+    if (std::strcmp(mode, "cap-bytes") == 0) {
+      // One maximum-size profile fills the per-client byte budget, so a
+      // second creator's set_icc_file must be refused before it allocates.
+      const int first = open(argv[2], O_RDONLY);
+      const int second = open(argv[2], O_RDONLY);
+      if (first < 0 || second < 0) {
+        std::println(stderr, "color-feedback-client: cannot open ICC budget fixture {}", argv[2]);
+        return 1;
+      }
+      auto* filled = wp_color_manager_v1_create_icc_creator(state.manager);
+      auto* overflow = wp_color_manager_v1_create_icc_creator(state.manager);
+      wp_image_description_creator_icc_v1_set_icc_file(filled, first, 0, 32U * 1024U * 1024U);
+      wp_image_description_creator_icc_v1_set_icc_file(overflow, second, 0, 1);
+      close(first);
+      close(second);
+      if (!expectProtocolError(
+              state, &wp_image_description_creator_icc_v1_interface, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE
+          )) {
+        std::println(stderr, "color-feedback-client: the ICC byte budget did not refuse the overflow set_icc_file");
+        return 1;
+      }
+      std::println(
+          R"({{"event":"icc_cap_bytes","code":{}}})",
+          static_cast<uint32_t>(WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE)
+      );
+      wl_display_disconnect(state.display);
+      return 2;
+    }
+    if (std::strcmp(mode, "cap-retained") == 0) {
+      // Created descriptions keep their exact profile bytes, so the budget
+      // covers what the client already created: two maximum-padded
+      // descriptions leave no room for a third staging buffer.
+      std::array<wp_image_description_v1*, 2> kept{};
+      for (size_t index = 0; index < 3; ++index) {
+        const int fd = open(argv[2], O_RDONLY);
+        if (fd < 0) {
+          std::println(stderr, "color-feedback-client: cannot open ICC budget fixture {}", argv[2]);
+          return 1;
+        }
+        const off_t length = lseek(fd, 0, SEEK_END);
+        lseek(fd, 0, SEEK_SET);
+        auto* creator = wp_color_manager_v1_create_icc_creator(state.manager);
+        wp_image_description_creator_icc_v1_set_icc_file(creator, fd, 0, static_cast<uint32_t>(length));
+        close(fd);
+        if (expectProtocolError(
+                state, &wp_image_description_creator_icc_v1_interface,
+                WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE
+            )) {
+          std::println(
+              R"({{"event":"icc_cap_retained","code":{},"iteration":{}}})",
+              static_cast<uint32_t>(WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE), index
+          );
+          wl_display_disconnect(state.display);
+          return 2;
+        }
+        auto* description = wp_image_description_creator_icc_v1_create(creator);
+        DescriptionResult result;
+        wp_image_description_v1_add_listener(description, &kResultListener, &result);
+        while (!result.ready && !result.failed && wl_display_dispatch(state.display) >= 0) {
+        }
+        if (!result.ready) {
+          std::println(stderr, "color-feedback-client: budget fixture did not parse (cause {})", result.cause);
+          return 1;
+        }
+        if (index < kept.size()) {
+          kept[index] = description;
+        }
+      }
+      std::println(stderr, "color-feedback-client: the retained ICC budget did not refuse the third description");
+      return 1;
+    }
+    if (argc != 3) {
+      std::println(stderr, "color-feedback-client: icc mode {} needs a profile argument", mode);
+      return 1;
+    }
     const int fd = open(argv[2], O_RDONLY);
     if (fd < 0) {
       std::println(stderr, "color-feedback-client: cannot open ICC profile {}", argv[2]);

@@ -1,6 +1,6 @@
 #pragma once
 
-// Panel colorimetry characterization and SDR gamut mapping (umbriel#574).
+// Panel colorimetry characterization and SDR gamut mapping.
 // A PanelColorimetry describes what untagged SDR signal values mean to the
 // panel: its primaries, white point, and transfer curve. With that, "gamut
 // limiting" is a plain output transform that interprets untagged SDR as sRGB
@@ -29,7 +29,10 @@ namespace umbriel {
       Curve,
     };
     Kind kind = Kind::Srgb;
-    // Kind::Curve only: encode(i / (size - 1)) for linear inputs in [0, 1].
+    // Kind::Curve only: encode((i / (size - 1))²) for linear inputs in [0, 1].
+    // The input grid clusters at zero because encode curves rise steeply
+    // there; a uniform grid keeps several 8-bit codes of lerp error in the
+    // shadows no matter how densely it is sampled.
     std::vector<float> encode;
   };
 
@@ -48,8 +51,9 @@ namespace umbriel {
   // (wp_image_description_creator_icc_v1). Srgb and Gamma22 are exact named
   // fast paths; Power is a parametric power fit in the protocol's
   // set_tf_power/tf_power vocabulary: the EOTF exponent e with
-  // optical = electrical^e (the request's valid range is 1.0..10.0; a fit
-  // outside it is kept as fitted and only clamped by the buffer mapping).
+  // optical = electrical^e, fitted to minimize the worst-case linear-light
+  // error (the request's valid range is 1.0..10.0; a fit outside it is kept
+  // as fitted and only clamped by the buffer mapping).
   struct TransferFit {
     enum class Kind {
       Srgb,
@@ -66,20 +70,23 @@ namespace umbriel {
   // per-buffer 3D LUTs (a new render transform type).
   [[nodiscard]] TransferFit fitTransfer(const PanelTransfer& transfer);
 
-  // The encode curve baked to uint16 LUT entries for
-  // wlr_color_transform_init_lut_3x1d (channel-agnostic; all channels share it).
-  [[nodiscard]] std::vector<uint16_t> bakeEncodeLut(const PanelTransfer& transfer, size_t dim);
-
   // Output-side SDR gamut mapping matrix, generic over `wideness` in [0, 1]
-  // (KWin semantics: 0 = interpret untagged SDR strictly as sRGB, 1 = as the
-  // panel's native gamut, linear primary interpolation with the white fixed).
-  // Wave 1 maps SdrGamut to the endpoints only; intermediate values are the
-  // future slider's math and are never selected at runtime yet.
+  // (0 = interpret untagged SDR strictly as sRGB, 1 = as the
+  // panel's native gamut, linear primary interpolation in between). The
+  // mapping is white-preserving (relative colorimetric): source white always
+  // lands on the panel white, so switching native <-> srgb never changes how
+  // white renders, and only chroma is confined to the sRGB gamut. Wideness 1
+  // is the identity matrix — it maps nothing and applies no panel TRC (the
+  // runtime stages no transform at all instead, see sdrGamutStaged).
+  // Intermediate values are the future slider's math and are never selected
+  // at runtime yet.
   void sdrGamutMatrix(const wlr_color_primaries& panel, float wideness, float matrix[9]);
 
   // The supplied scene transform for SDR gamut mapping: one matrix stage
-  // (sRGB -> panel, wideness 0) followed by the panel's encode stage (named
-  // inverse-EOTF or a baked 3x1D LUT). Returns NULL on allocation failure.
+  // (sRGB -> panel, wideness 0) followed by the panel's encode stage — the
+  // named inverse-EOTF for named curves, or an analytic gamma 2.2 stage with
+  // the residual baked to a 3x1D LUT for sampled curves. Returns NULL on
+  // allocation failure.
   [[nodiscard]] wlr_color_transform* buildSdrGamutTransform(const PanelColorimetry& panel);
 
   // The staging decision, factored out of Output: stage the SDR gamut

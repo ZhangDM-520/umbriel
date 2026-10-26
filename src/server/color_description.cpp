@@ -1,5 +1,7 @@
 #include "server/color_description.h"
 
+#include "output/colorimetry_internal.h"
+
 #include <cmath>
 #include <utility>
 
@@ -171,6 +173,11 @@ namespace umbriel {
     const uint8_t versionMajor = iccBytes[8];
     if (versionMajor != 2 && versionMajor != 4) {
       return {.description = std::nullopt, .error = "unsupported ICC profile version (must be 2 or 4)"};
+    }
+    // The bytes are client-supplied up to 32 MB: structural bounds are
+    // re-checked at this untrusted boundary before any parser sees them.
+    if (const std::string structureError = color_detail::iccStructureError(iccBytes); !structureError.empty()) {
+      return {.description = std::nullopt, .error = structureError};
     }
     const IccParse parsed = parseIccProfile(iccBytes, IccClassScope::DisplayOrColorSpace);
     if (!parsed.colorimetry) {

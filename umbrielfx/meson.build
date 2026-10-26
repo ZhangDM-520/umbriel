@@ -71,11 +71,12 @@ umbrielfx_deps = [
   wlroots_dep,
 ]
 
-# ICC profile evaluation for client-supplied color management. Without lcms2
-# the fallback rejects ICC profiles and leaves the parametric transforms.
-umbrielfx_lcms2_dep = dependency('lcms2', required: false)
-if umbrielfx_lcms2_dep.found()
-  umbrielfx_deps += umbrielfx_lcms2_dep
+# ICC profile evaluation for client-supplied color management. The root
+# project's option-gated lcms2 lookup decides this with the compositor's ICC
+# path: without lcms2 the fallback rejects ICC profiles and leaves the
+# parametric transforms.
+if lcms2_dep.found()
+  umbrielfx_deps += lcms2_dep
   umbrielfx_sources += files('render/color_lcms2.c')
 else
   umbrielfx_sources += files('render/color_fallback.c')

@@ -12,6 +12,12 @@
 namespace umbriel {
 
   class Server;
+  struct ColorDescription;
+
+  // Surface transfer label for reports: named protocol values keep their name,
+  // fitted powers report the exponent ("power <x>"), a description without a
+  // curve reports "unspecified", and no description at all reports "none".
+  std::string surfaceTransferLabel(const ColorDescription* description);
 
   struct IpcCommands {
     static nlohmann::json keyboardLayouts(Server& server, std::string_view arg);
