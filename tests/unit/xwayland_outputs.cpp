@@ -196,6 +196,22 @@ UMBRIEL_TEST(nativeScreenPublishesTheRenderScale) {
   CHECK_EQ(main.scale, 2.5);
   CHECK_EQ(main.toXWidth(1000), 2500);
   CHECK_EQ(main.toLayoutWidth(2500), 1000);
+
+  // The whole-output mapping must agree with the coordinate mapping: a
+  // fullscreen X window is configured to the X rectangle and drawn through the
+  // same scale. The rectangle measures render-scale pixels (3072 logical x
+  // 2.5), not the physical mode.
+  CHECK_EQ(main.x.width, 7680);
+  CHECK_EQ(main.x.height, 4320);
+  CHECK_EQ(main.toXWidth(main.layout.width), main.x.width);
+  CHECK_EQ(main.toX(main.layout.x + main.layout.width), main.x.x + main.x.width);
+  CHECK_EQ(main.toLayoutWidth(main.x.width), main.layout.width);
+
+  // Multi-output positions spread by the same factor as the rectangles, so
+  // the right neighbour still starts where the scaled output ends.
+  const umbriel::XwaylandRegion right = outputs.region(fixture.outputs[2], 0, 0);
+  CHECK_EQ(right.x.x, main.x.x + main.x.width);
+  CHECK_EQ(right.x.y, main.x.y);
 }
 
 int main() { return RUN_TESTS(); }

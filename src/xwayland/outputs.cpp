@@ -114,7 +114,13 @@ namespace umbriel {
       if (m_nativeResolution) {
         // X11 clients render at the output's render scale, like Wayland clients.
         region.scale = m_renderScale != nullptr ? m_renderScale(output) : static_cast<double>(output->scale);
+        // X coordinates measure render-scale pixels, so the X rectangle must
+        // too: scale the physical resolution by the same factor the mapping
+        // uses. A render scale that follows the logical one has factor 1 and
+        // keeps the physical size exactly.
         wlr_output_transformed_resolution(output, &region.x.width, &region.x.height);
+        region.x.width = scaled(region.x.width, region.scale / output->scale);
+        region.x.height = scaled(region.x.height, region.scale / output->scale);
       }
       positionScale = std::max(positionScale, region.scale);
       regions.push_back({.output = output, .region = region});
