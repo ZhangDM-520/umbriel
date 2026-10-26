@@ -134,6 +134,10 @@ namespace umbriel {
     // how far the zoom has come.
     [[nodiscard]] static double settledZoom();
     [[nodiscard]] bool dragging() const { return m_dragCard != nullptr || m_middlePressed; }
+    [[nodiscard]] bool cardDragging() const { return m_dragCard != nullptr; }
+    // Re-resolves the drop under the stationary drag pointer after the strip moved beneath it (edge auto-scroll or
+    // finger-scroll pan). A no-op without a live card drag.
+    void refreshDragTarget();
 
   private:
     static void onNavigationDeviceDestroyed(wl_listener* listener, void* data);
@@ -432,6 +436,9 @@ namespace umbriel {
     bool m_middleScrolling = false;
 
     Card* m_dragCard = nullptr;
+    // Last pointer position the drag followed — refreshDragTarget() re-resolves the drop from it.
+    double m_dragPointerX = 0;
+    double m_dragPointerY = 0;
     double m_dragOffsetX = 0;
     double m_dragOffsetY = 0;
     Workspace* m_dragSourceWorkspace = nullptr;

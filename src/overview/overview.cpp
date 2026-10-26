@@ -3310,6 +3310,8 @@ namespace umbriel {
     }
     View* view = card->view;
     m_dragCard = card;
+    m_dragPointerX = m_pressX;
+    m_dragPointerY = m_pressY;
     m_dragOffsetX = m_pressX - card->box.x;
     m_dragOffsetY = m_pressY - card->box.y;
     m_dragSourceWorkspace = view->workspace();
@@ -3338,8 +3340,18 @@ namespace umbriel {
     m_server->cursor()->overrideCursor("grabbing");
   }
 
+  // The strip can move under a stationary drag pointer (edge auto-scroll, finger-scroll pan): re-running updateDrag
+  // at the stored position keeps the drop resolving where the card visibly sits.
+  void Overview::refreshDragTarget() {
+    if (m_dragCard != nullptr) {
+      updateDrag(m_dragPointerX, m_dragPointerY);
+    }
+  }
+
   void Overview::updateDrag(double lx, double ly) {
     Card* card = m_dragCard;
+    m_dragPointerX = lx;
+    m_dragPointerY = ly;
     card->box.x = static_cast<int>(std::lround(lx - m_dragOffsetX));
     card->box.y = static_cast<int>(std::lround(ly - m_dragOffsetY));
     wlr_scene_node_set_position(&card->tree->node, card->box.x, card->box.y);
@@ -3421,6 +3433,8 @@ namespace umbriel {
     m_dropWorkspaceGroup = nullptr;
     hideDropHint();
     m_server->cursor()->overrideCursor(nullptr);
+    // A card drag is a drag this timer may be serving: edge auto-scroll dies with it (mirror handleDataDragEnded).
+    m_server->cursor()->handleDataDragEnded();
 
     if (view == nullptr || !view->mapped()) {
       return;

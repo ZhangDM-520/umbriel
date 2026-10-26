@@ -495,10 +495,19 @@ namespace umbriel {
   Workspace* Cursor::dataDragEdgeScrollTarget(double* speed) const {
     *speed = 0;
     const Config::Input::DragEdgeScroll& edge = config().input.dragEdgeScroll;
+    Overview* overview = m_server->overview();
+    const bool overviewActive = overview != nullptr && overview->active();
+    // An overview card drag is a first-class drag here: it may slide the strip. Data drags AND compositor tiled
+    // moves keep the overview exclusion (DnD-overview semantics, pinned by drag/data_drag_edge_scroll.sh; the
+    // MoveGrab-in-overview drag model belongs to a later wave). The target maths resolve the output's ACTIVE
+    // workspace at the real usable-area edges — not the row under the pointer or the preview bounds (shared
+    // with the data-drag and tiled-move paths).
+    const bool cardDrag = overview != nullptr && overview->cardDragging();
+    const bool tiledMove = tiledMoveDragActive();
     if (!edge.enabled
         || m_server->sessionLocked()
-        || (m_server->seat()->wlr()->drag == nullptr && !tiledMoveDragActive())
-        || (m_server->overview() != nullptr && m_server->overview()->active())) {
+        || (m_server->seat()->wlr()->drag == nullptr && !tiledMove && !cardDrag)
+        || (overviewActive && !cardDrag)) {
       return nullptr;
     }
 
@@ -629,6 +638,10 @@ namespace umbriel {
     }
     scrolling->setScroll(nextScroll);
     workspace->markArrange(false);
+    // The strip moved under a stationary pointer: a live card drag must drop where it visibly sits now.
+    if (Overview* overview = m_server->overview(); overview != nullptr && overview->cardDragging()) {
+      overview->refreshDragTarget();
+    }
     wl_event_source_timer_update(m_dataDragEdgeScrollTimer, kDataDragEdgeScrollTickMs);
     return 0;
   }
@@ -2181,6 +2194,9 @@ namespace umbriel {
       overview->handleMotion(m_cursor->x, m_cursor->y, timeMsec);
       if (overview->dragging()) {
         clearPointerFocus();
+        if (overview->cardDragging()) {
+          updateDataDragEdgeScroll();
+        }
         return;
       }
       double sx = 0;
