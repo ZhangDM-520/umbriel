@@ -109,7 +109,7 @@ namespace {
     return bytes;
   }
 
-  // Matrix-shaper RGB display profile, as Mutter's meta-color-device.c builds them in-test.
+  // Matrix-shaper RGB display profile fixture generator.
   std::vector<uint8_t> matrixShaperProfile(
       const cmsCIExyY& white, const cmsCIExyYTRIPLE& primaries, const std::array<cmsToneCurve*, 3>& curves
   ) {
@@ -702,7 +702,7 @@ UMBRIEL_TEST(synthesizedEdidProfileRoundTripsThroughTheIccParser) {
   std::println("skip: built without lcms2");
 #else
   // The advertised bytes must describe the same panel the parser recovered
-  // from the EDID: feed the synthesis back through the wave-1 parser.
+  // from the EDID: feed the synthesis back through the ICC parser.
   const auto edid = edidWithD65AndGamma22();
   const wlr_color_primaries defaults = displayP3Primaries();
   const std::optional<umbriel::PanelColorimetry> source = umbriel::panelColorimetryFromEdid(edid, &defaults);

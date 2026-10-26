@@ -754,12 +754,12 @@ namespace umbriel {
       }
       creator->iccSet = true;
       std::vector<uint8_t> bytes(length);
-      size_t read = 0;
+      size_t totalRead = 0;
       if (lseek(fd, offset, SEEK_SET) < 0) {
         creator->readFailed = true;
       }
-      while (!creator->readFailed && read < bytes.size()) {
-        const ssize_t count = ::read(fd, bytes.data() + read, bytes.size() - read);
+      while (!creator->readFailed && totalRead < bytes.size()) {
+        const ssize_t count = ::read(fd, bytes.data() + totalRead, bytes.size() - totalRead);
         if (count < 0 && errno == EINTR) {
           continue;
         }
@@ -767,7 +767,7 @@ namespace umbriel {
           creator->readFailed = true;
           break;
         }
-        read += static_cast<size_t>(count);
+        totalRead += static_cast<size_t>(count);
       }
       close(fd);
       if (!creator->readFailed) {

@@ -304,6 +304,12 @@ void color_transform_fail_lut_fold_alloc_for_test(bool fail) {
 // Sample one table row at a normalized position, linearly the way the shaders
 // sample a LUT.
 static double lut_row_eval(const uint16_t* row, size_t dim, double x) {
+  if (x <= 0.0) {
+    return row[0] / 65535.0;
+  }
+  if (x >= 1.0) {
+    return row[dim - 1] / 65535.0;
+  }
   const double position = x * (double)(dim - 1);
   const size_t lower = (size_t)position;
   const size_t upper = lower + 1 < dim ? lower + 1 : dim - 1;

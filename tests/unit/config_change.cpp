@@ -662,7 +662,8 @@ UMBRIEL_TEST(aRereadProfileRuleWithUnchangedFileChangesNothing) {
   Config before;
   OutputRule original;
   original.name = "HEADLESS-1";
-  original.colorProfile = "/profiles/panel.icc?mtime=1000000000";
+  original.colorProfile = "/profiles/panel.icc";
+  original.colorProfileMtime = 1000000000;
   before.outputs.push_back(original);
 
   const Config after = before;
@@ -670,7 +671,7 @@ UMBRIEL_TEST(aRereadProfileRuleWithUnchangedFileChangesNothing) {
   CHECK(!ConfigEffects::between(before, after).any());
 
   Config edited = before;
-  edited.outputs[0].colorProfile = "/profiles/panel.icc?mtime=1000000060";
+  edited.outputs[0].colorProfileMtime = 1000000060;
   CHECK(ConfigChange::between(before, edited).outputs);
   const ConfigEffects changed = ConfigEffects::between(before, edited);
   CHECK(changed.outputState);

@@ -577,7 +577,7 @@ UMBRIEL_TEST(clientIccValidationRejectsWithoutProtocolErrors) {
   CHECK(!wrongClass.description.has_value());
   CHECK(!wrongClass.error.empty());
 
-  // A client LUT profile fails per the wave-1 parser's matrix-shaper rules.
+  // A client LUT profile fails per the matrix-shaper parser rules.
   std::vector<uint8_t> lutProfile = bytes;
   {
     cmsHPROFILE profile = cmsOpenProfileFromMem(lutProfile.data(), static_cast<cmsUInt32Number>(lutProfile.size()));
