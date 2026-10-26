@@ -620,7 +620,8 @@ void wlr_scene_set_preferred_scale_provider(
 /**
  * Chooses how minified scene buffers are sampled. Sources that are not
  * minified and buffers that pin WLR_SCALE_FILTER_NEAREST are unaffected.
- * Defaults to WLR_SCENE_DOWNSAMPLE_BILINEAR.
+ * Defaults to WLR_SCENE_DOWNSAMPLE_BILINEAR in the library; Umbriel's shell
+ * sets the mode from `appearance.downsample`, which defaults to box.
  */
 void wlr_scene_set_downsample_mode(struct wlr_scene* scene, enum wlr_scene_downsample_mode mode);
 

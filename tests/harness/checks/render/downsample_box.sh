@@ -44,7 +44,9 @@ if [[ $presented != *"buffer 1200x900"* || $presented != *"scale 360/120"* ]]; t
   exit 1
 fi
 
-readonly IMAGE="$UMBRIEL_RUNTIME_DIR/downsample-box.png"
+IMAGE="$UMBRIEL_RUNTIME_DIR/downsample-box.png"
+# Cap leg captures at output-raster resolution instead of logical.
+GRIM=(grim -o HEADLESS-1)
 
 pixel() {
   local px=$1 py=$2 red green blue
@@ -66,7 +68,7 @@ probe_matches() {
 expect_pair() {
   local description=$1 g1=$2 b1=$3 g2=$4 b2=$5
   for _ in $(seq 30); do
-    grim -o HEADLESS-1 "$IMAGE"
+    "${GRIM[@]}" "$IMAGE"
     if probe_matches 41 190 0 "$g1" "$b1" && probe_matches 42 190 0 "$g2" "$b2"; then
       return 0
     fi
@@ -96,8 +98,13 @@ echo "downsample method controls minified sampling and reload re-renders"
 
 # Cap: at 5:1 the four-tap grid must step ratio/K texels so it still spans the
 # whole footprint (a one-texel step would average only 4 of the 5 texels and
-# report an even mix). The window's logical position (40,40) lands at output
-# (32,32) under scale 0.8; px 41 and 42 cover whole 5-texel trios.
+# report an even mix). render_scale 4.0 on the scale-0.8 output draws the
+# client's 1600-texel buffer into the window's 320-pixel raster (5:1), and the
+# window's logical (40,40) lands at raster (32,32). Capture at raster
+# resolution so probes read framebuffer pixels: px 41 and 42 cover 5-texel
+# footprints whose 1.25-texel taps average 5:3 and 3:5 green mixes,
+# (0,159,96) and (0,96,159); the one-texel-step mutation reaches only 4 of
+# the 5 texels and reports the even mix (0,127,127) at every pixel.
 mapped_before=$(grep -c '^mapped ' "$CLIENT_LOG")
 sed -i 's/scale = 1.0/scale = 0.8/; s/render_scale = 3.0/render_scale = 4.0/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
@@ -108,6 +115,17 @@ if [[ $presented != *"buffer 1600x1200"* ]]; then
   exit 1
 fi
 "$UMBRIEL" settle > /dev/null
-expect_pair "capped box spans the footprint" 139 115 127 127
+IMAGE="$UMBRIEL_RUNTIME_DIR/downsample-box-cap.png"
+GRIM=(grim -s 0.8 -o HEADLESS-1)
+"${GRIM[@]}" "$IMAGE"
+# The 5:1 pin assumes the raster rect (32,32,320,240): assert its black edges
+# instead of trusting the scale math.
+if [[ $(pixel 31 190) != "0 0 0" || $(pixel 352 190) != "0 0 0" || $(pixel 41 31) != "0 0 0" ||
+  $(pixel 41 272) != "0 0 0" || $(pixel 32 190) == "0 0 0" || $(pixel 351 190) == "0 0 0" ||
+  $(pixel 41 32) == "0 0 0" || $(pixel 41 271) == "0 0 0" ]]; then
+  echo "window raster rect is not (32,32,320,240): x31..32 $(pixel 31 190)/$(pixel 32 190), x351..352 $(pixel 351 190)/$(pixel 352 190), y31..32 $(pixel 41 31)/$(pixel 41 32), y271..272 $(pixel 41 271)/$(pixel 41 272)"
+  exit 1
+fi
+expect_pair "capped box spans the footprint" 159 96 96 159
 
 echo "capped box grid spans the full minification footprint"
