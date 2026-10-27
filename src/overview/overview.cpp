@@ -2398,6 +2398,12 @@ namespace umbriel {
     if (m_navigationOutput == group->output()) {
       cancelNavigation();
     }
+    // A row pruned mid-drag must not survive in the drop state: endDrag and the edge-scroll timer both resolve
+    // the strip through it. The hint clears with it, like every other drop-state reset (onOutputRemoved).
+    if (m_drop.workspace != nullptr && !workspaceRowAlive(m_drop.workspace)) {
+      hideDropHint();
+      m_drop = {};
+    }
     OutputState* state = stateFor(group->output());
     if (state == nullptr) {
       return;
@@ -2524,8 +2530,9 @@ namespace umbriel {
     return nullptr;
   }
 
-  Workspace*
-  Overview::workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool forDragTarget) {
+  Workspace* Overview::workspaceAtPoint(
+      double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis, bool extendFilmstripEnds
+  ) {
     for (const auto& state : m_outputs) {
       PreviewMetrics metrics{};
       if (!previewMetrics(*state, *m_server, zoom(), metrics)) {
@@ -2550,7 +2557,7 @@ namespace umbriel {
         // the centered preview. Drag targeting must cover that same visible area
         // along the scrolling axis or the extreme gaps become dead zones.
         // Background clicks retain the narrower preview hitbox.
-        const bool extend = forDragTarget && workspace->scrollingLayout() != nullptr;
+        const bool extend = extendScrollingAxis && workspace->scrollingLayout() != nullptr;
         wlr_box box = previewBox(metrics, state->rowScroll.current(), index);
         if (extend) {
           if (horizontalWorkspaces) {
@@ -2561,11 +2568,12 @@ namespace umbriel {
             box.width = metrics.outputBox.width;
           }
         }
-        if (forDragTarget) {
-          // The same dead-zone fix along the workspace axis: the rows at either end of the filmstrip claim the
-          // space out to the output edge, so a card dragged (or edge-scroll panned) past the last preview still
-          // drops on the end workspace. Insertion gaps keep priority — workspaceGapAt runs first and still owns
-          // the spaces between previews and the dynamic edge before row 0.
+        if (extendFilmstripEnds) {
+          // The same dead-zone fix along the workspace axis, drop targeting only: the rows at either end of the
+          // filmstrip claim the space out to the output edge, so a card dragged (or edge-scroll panned) past the
+          // last preview still drops on the end workspace. Insertion gaps keep priority — workspaceGapAt runs
+          // first and still owns the spaces between previews and the dynamic edge before row 0. Wheel, pointer
+          // scroll and navigation lookups pass this false and keep their previous hitboxes.
           const size_t count = state->workspaceBackgrounds.size();
           if (index == 0) {
             if (horizontalWorkspaces) {
@@ -2740,7 +2748,7 @@ namespace umbriel {
       m_middlePressCard = card;
       Workspace* workspace = card != nullptr && card->view != nullptr
           ? card->view->workspace()
-          : workspaceAtPoint(lx, ly, nullptr, nullptr, false);
+          : workspaceAtPoint(lx, ly, nullptr, nullptr, false, false);
       m_middleOutput = workspace != nullptr && workspace->group() != nullptr ? workspace->group()->output() : nullptr;
       m_middlePressX = lx;
       m_middlePressY = ly;
@@ -2760,7 +2768,7 @@ namespace umbriel {
     m_pressX = lx;
     m_pressY = ly;
     if (card == nullptr) {
-      m_pressWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, false);
+      m_pressWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, false, false);
     }
     return true;
   }
@@ -2879,7 +2887,7 @@ namespace umbriel {
       selectRelativeWorkspace(sign, output);
       return true;
     }
-    Workspace* workspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true);
+    Workspace* workspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true, false);
     ScrollingLayout* scrolling = workspace != nullptr ? workspace->scrollingLayout() : nullptr;
     if (scrolling == nullptr) {
       return true;
@@ -2904,7 +2912,7 @@ namespace umbriel {
     if (!interactive()) {
       return nullptr;
     }
-    return workspaceAtPoint(lx, ly, nullptr, nullptr, true);
+    return workspaceAtPoint(lx, ly, nullptr, nullptr, true, false);
   }
 
   Workspace* Overview::navigationWorkspace() const {
@@ -2917,6 +2925,28 @@ namespace umbriel {
       }
     }
     return nullptr;
+  }
+
+  bool Overview::workspaceRowAlive(const Workspace* workspace) const {
+    if (workspace == nullptr) {
+      return false;
+    }
+    for (const auto& state : m_outputs) {
+      const WorkspaceGroup* group = state->output != nullptr ? state->output->workspaceGroup() : nullptr;
+      if (group == nullptr) {
+        continue;
+      }
+      for (size_t index = 0; index < group->workspaceCount(); ++index) {
+        if (group->workspaceAt(index) == workspace) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  Workspace* Overview::dragTargetWorkspace() const {
+    return m_dragCard != nullptr && workspaceRowAlive(m_drop.workspace) ? m_drop.workspace : nullptr;
   }
 
   void Overview::onNavigationDeviceDestroyed(wl_listener* listener, void* /*data*/) {
@@ -2941,7 +2971,7 @@ namespace umbriel {
     }
     m_navigationOutput = output;
     m_navigationHorizontalWorkspaces = output->workspaceGroup()->workspaceAxis() == WorkspaceAxis::Horizontal;
-    m_navigationWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true);
+    m_navigationWorkspace = workspaceAtPoint(lx, ly, nullptr, nullptr, true, false);
     if (m_navigationWorkspace == nullptr || m_navigationWorkspace->group() != output->workspaceGroup()) {
       m_navigationWorkspace = output->workspaceGroup()->active();
     }
@@ -3481,7 +3511,7 @@ namespace umbriel {
     m_dropWorkspaceGroup = nullptr;
 
     size_t workspacePosition = 0;
-    Workspace* workspace = workspaceAtPoint(lx, ly, &state, &workspacePosition, true);
+    Workspace* workspace = workspaceAtPoint(lx, ly, &state, &workspacePosition, true, true);
     m_drop = {.workspace = workspace};
     if (workspace == nullptr || state == nullptr) {
       hideDropHint();

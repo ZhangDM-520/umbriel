@@ -135,9 +135,16 @@ namespace umbriel {
     [[nodiscard]] static double settledZoom();
     [[nodiscard]] bool dragging() const { return m_dragCard != nullptr || m_middlePressed; }
     [[nodiscard]] bool cardDragging() const { return m_dragCard != nullptr; }
+    // A middle-press pointer-scroll pan owns the motion while it runs (handleMotion routes it ahead of the card
+    // drag), so the held card's drop row must not drive edge-scroll pairing in that window.
+    [[nodiscard]] bool middlePressed() const { return m_middlePressed; }
     // Re-resolves the drop under the stationary drag pointer after the strip moved beneath it (edge auto-scroll or
     // finger-scroll pan). A no-op without a live card drag.
     void refreshDragTarget();
+    // The workspace a held card would drop into — the row under the drag pointer as refreshDragTarget last
+    // resolved it. Null without a live card drag, while the pointer sits in an insertion gap, or when the row
+    // has been pruned from its group underneath the drag.
+    [[nodiscard]] Workspace* dragTargetWorkspace() const;
     // Workspace-filmstrip twin of the layout-strip edge auto-scroll (input.drag_edge_scroll drives both during a
     // held card drag): pan the rows along the workspace axis. speedPxPerSec is the edge ramp's signed screen-px/s;
     // the filmstrip converts it to rows through the preview step so the visible slide matches the strip's.
@@ -150,6 +157,9 @@ namespace umbriel {
   private:
     static void onNavigationDeviceDestroyed(wl_listener* listener, void* data);
     [[nodiscard]] Workspace* navigationWorkspace() const;
+    // Pointer-identity membership test that never dereferences `workspace`: dynamic-workspace reconciliation can
+    // prune a row while the drop state still holds it (navigationWorkspace()'s pattern).
+    [[nodiscard]] bool workspaceRowAlive(const Workspace* workspace) const;
     OverviewNavigation m_navigation;
     Output* m_navigationOutput = nullptr;
     Workspace* m_navigationWorkspace = nullptr;
@@ -388,11 +398,15 @@ namespace umbriel {
     void scheduleFrames() const;
 
     [[nodiscard]] Card* cardAt(double lx, double ly);
-    // Hit-test a workspace preview. `forDragTarget` widens the boxes the way a drag needs them: along the scrolling
-    // axis over the whole output (overhanging cards), and to the output edges at both ends of the filmstrip (the
-    // extreme gaps were dead zones). Background clicks keep the narrow preview hitbox.
-    [[nodiscard]] Workspace*
-    workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool forDragTarget);
+    // Hit-test a workspace preview. `extendScrollingAxis` widens the boxes over the whole output along the
+    // scrolling axis (overhanging cards must stay targetable there). `extendFilmstripEnds` is drop-targeting
+    // only: the rows at either end of the filmstrip claim the space out to the output edge along the workspace
+    // axis, so a card released past the last preview lands on the end workspace instead of nowhere. Wheel,
+    // pointer-scroll and navigation lookups pass it false and keep the narrow preview hitbox in those extremes.
+    [[nodiscard]] Workspace* workspaceAtPoint(
+        double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis,
+        bool extendFilmstripEnds
+    );
     [[nodiscard]] WorkspaceGroup*
     workspaceGapAt(double lx, double ly, OutputState** outState, size_t* outIndex, wlr_box* outHintBox);
     [[nodiscard]] Workspace* preferredWorkspace() const;

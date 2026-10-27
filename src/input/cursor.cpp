@@ -499,10 +499,11 @@ namespace umbriel {
     const bool overviewActive = overview != nullptr && overview->active();
     // An overview card drag is a first-class drag here: it may slide the strip AND the workspace filmstrip. Data
     // drags AND compositor tiled moves keep the overview exclusion (DnD-overview semantics, pinned by
-    // drag/data_drag_edge_scroll.sh; the MoveGrab-in-overview drag model belongs to a later wave). The target
-    // maths resolve the output's ACTIVE workspace at the real usable-area edges — not the row under the pointer
-    // or the preview bounds (shared with the data-drag and tiled-move paths).
-    const bool cardDrag = overview != nullptr && overview->cardDragging();
+    // drag/data_drag_edge_scroll.sh; the MoveGrab-in-overview drag model belongs to a later wave). A concurrent
+    // middle-press pointer-scroll pan owns the motion while it runs, so the card's frozen drop row must not pair
+    // with the live pointer's edge ramp — the machinery stands down until the hold is the card's alone. The
+    // target maths resolve the real usable-area edges — not the row under the pointer or the preview bounds.
+    const bool cardDrag = overview != nullptr && overview->cardDragging() && !overview->middlePressed();
     const bool tiledMove = tiledMoveDragActive();
     if (!edge.enabled
         || m_server->sessionLocked()
@@ -514,12 +515,18 @@ namespace umbriel {
     wlr_output* wlrOutput = wlr_output_layout_output_at(m_server->outputLayout(), m_cursor->x, m_cursor->y);
     Output* output = m_server->outputFromWlr(wlrOutput);
     WorkspaceGroup* group = output != nullptr ? output->workspaceGroup() : nullptr;
-    Workspace* workspace = group != nullptr ? group->active() : nullptr;
-    if (output == nullptr || workspace == nullptr) {
+    Workspace* active = group != nullptr ? group->active() : nullptr;
+    if (output == nullptr || active == nullptr) {
       return targets;
     }
 
-    const wlr_box area = workspace->usableArea();
+    // A held card aims at the row under the drag pointer — its drop target, the same row the finger-pan path
+    // resolves through navigationWorkspace() — so the strip it must reveal is that workspace's, not the active
+    // one's. A card over an insertion gap has no row to slide. Data drags and tiled moves keep the active
+    // workspace. The shared edge ramp runs on the target workspace's real usable-area edges.
+    Workspace* workspace = cardDrag ? overview->dragTargetWorkspace() : active;
+
+    const wlr_box area = workspace != nullptr ? workspace->usableArea() : active->usableArea();
     // The shared edge ramp: signed screen px/s from the pointer's depth into the trigger zone at either end of
     // the usable area along `verticalAxis`.
     const auto edgeSpeed = [&](bool verticalAxis, double* speed) {
@@ -539,7 +546,7 @@ namespace umbriel {
       return *speed != 0;
     };
 
-    ScrollingLayout* scrolling = workspace->scrollingLayout();
+    ScrollingLayout* scrolling = workspace != nullptr ? workspace->scrollingLayout() : nullptr;
     if (scrolling != nullptr && !scrolling->columns().empty()) {
       const bool vertical = workspace->scrollingVertical();
       double speed = 0;
