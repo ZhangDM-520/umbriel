@@ -386,13 +386,12 @@ namespace umbriel {
 
     // Every surface of the card rounds against the card's content box, the same rule the live window uses, so a
     // client that draws its corners from a subsurface keeps them rounded in the thumbnail.
-    const auto roundToCardBox = [surfaceRadius, contentW, contentH, view](wlr_scene_buffer* buffer) {
+    const fx_corner_radii contentCorners = view->titleBarHeight() > 0
+        ? corner_radii_new(0, 0, surfaceRadius, surfaceRadius)
+        : corner_radii_all(surfaceRadius);
+    const auto roundToCardBox = [surfaceRadius, contentW, contentH, contentCorners](wlr_scene_buffer* buffer) {
       const wlr_box cornerBox{-buffer->node.x, -buffer->node.y, contentW, contentH};
-      wlr_scene_buffer_set_corner_radii(
-          buffer,
-          view->titleBarHeight() > 0 ? corner_radii_new(0, 0, surfaceRadius, surfaceRadius)
-                                     : corner_radii_all(surfaceRadius)
-      );
+      wlr_scene_buffer_set_corner_radii(buffer, contentCorners);
       wlr_scene_buffer_set_corner_box(buffer, surfaceRadius > 0 ? &cornerBox : nullptr);
     };
     const double fx = static_cast<double>(contentW) / geometry.width;
@@ -461,7 +460,7 @@ namespace umbriel {
       const wlr_box blurBox{0, 0, contentW, contentH};
       card.blur.setAlpha(1.0F);
       card.blur.update(
-          card.tree, surface, blurBox, geometry, surfaceRadius, nullptr, view->blurOptions(), entry->buffer->opacity,
+          card.tree, surface, blurBox, geometry, contentCorners, nullptr, view->blurOptions(), entry->buffer->opacity,
           entry->buffer
       );
       blurUpdated = true;

@@ -148,6 +148,7 @@ namespace umbriel {
     // Effective optional window-rule override used by tearing diagnostics.
     [[nodiscard]] std::optional<bool> tearingRuleOverride();
     [[nodiscard]] bool confinePointer();
+    [[nodiscard]] bool allowsShortcutsInhibit();
     // A `background_render` rule applies: while hidden, the window stays unsuspended and gets frame callbacks at its
     // output's refresh rate.
     [[nodiscard]] bool backgroundRender() const { return m_backgroundRender; }
@@ -1066,6 +1067,7 @@ namespace umbriel {
     bool m_initialContentTypeRulesSettled = false;
     float m_ruleOpacity = 1.0F;
     bool m_backgroundRender = false;
+    bool m_allowShortcutsInhibit = true;
     float m_dragOpacity = 1.0F;
     float m_overviewOpacity = 1.0F;
     std::vector<std::unique_ptr<ViewSurfaceWatch>> m_viewSurfaceWatches;
