@@ -2526,7 +2526,7 @@ namespace umbriel {
   }
 
   Workspace*
-  Overview::workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis) {
+  Overview::workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool forDragTarget) {
     for (const auto& state : m_outputs) {
       PreviewMetrics metrics{};
       if (!previewMetrics(*state, *m_server, zoom(), metrics)) {
@@ -2551,7 +2551,7 @@ namespace umbriel {
         // the centered preview. Drag targeting must cover that same visible area
         // along the scrolling axis or the extreme gaps become dead zones.
         // Background clicks retain the narrower preview hitbox.
-        const bool extend = extendScrollingAxis && workspace->scrollingLayout() != nullptr;
+        const bool extend = forDragTarget && workspace->scrollingLayout() != nullptr;
         wlr_box box = previewBox(metrics, state->rowScroll.current(), index);
         if (extend) {
           if (horizontalWorkspaces) {
@@ -2560,6 +2560,31 @@ namespace umbriel {
           } else {
             box.x = metrics.outputBox.x;
             box.width = metrics.outputBox.width;
+          }
+        }
+        if (forDragTarget) {
+          // The same dead-zone fix along the workspace axis: the rows at either end of the filmstrip claim the
+          // space out to the output edge, so a card dragged (or edge-scroll panned) past the last preview still
+          // drops on the end workspace. Insertion gaps keep priority — workspaceGapAt runs first and still owns
+          // the spaces between previews and the dynamic edge before row 0.
+          const size_t count = state->workspaceBackgrounds.size();
+          if (index == 0) {
+            if (horizontalWorkspaces) {
+              const int end = box.x + box.width;
+              box.x = metrics.outputBox.x;
+              box.width = end - box.x;
+            } else {
+              const int end = box.y + box.height;
+              box.y = metrics.outputBox.y;
+              box.height = end - box.y;
+            }
+          }
+          if (index + 1 == count) {
+            if (horizontalWorkspaces) {
+              box.width = metrics.outputBox.x + metrics.outputBox.width - box.x;
+            } else {
+              box.height = metrics.outputBox.y + metrics.outputBox.height - box.y;
+            }
           }
         }
         if (!boxContains(box, lx, ly)) {
@@ -2949,11 +2974,9 @@ namespace umbriel {
         axis == OverviewNavigation::Axis::Horizontal ? overview.scrollFactorHorizontal : overview.scrollFactorVertical;
     const auto travel = OverviewNavigation::travelFor(m_navigationSource);
     if ((axis == OverviewNavigation::Axis::Horizontal) == m_navigationHorizontalWorkspaces) {
-      if (m_dragCard != nullptr) {
-        // Pan-only while a card drag is live: never step the filmstrip (switching the active workspace) under a
-        // held card.
-        return;
-      }
+      // The rows follow the fingers in both cases — panning is not a workspace step. While a card drag is live
+      // the release settles without selecting anything (see endNavigation) and the drop re-resolves under the
+      // stationary pointer instead; that is the pan-only contract the held card needs.
       if (!m_navigationStarted) {
         m_navigationStart = state->rowScroll.current();
         m_navigationScale = OverviewNavigation::travelScale(1.0, settledZoom(), factor, travel.workspace);
@@ -2968,6 +2991,9 @@ namespace umbriel {
           )
       );
       applyProgress();
+      if (m_dragCard != nullptr) {
+        refreshDragTarget();
+      }
       return;
     }
     Workspace* workspace = navigationWorkspace();
@@ -3023,16 +3049,24 @@ namespace umbriel {
     }
     const double projected = m_navigationStart + m_navigation.projectedPosition() * m_navigationScale;
     if ((m_navigation.axis() == OverviewNavigation::Axis::Horizontal) == m_navigationHorizontalWorkspaces) {
-      if (m_dragCard != nullptr) {
-        // Settle-only while a card drag is live: the workspace under the held card must not change.
-        return;
-      }
       OutputState* state = stateFor(output);
       WorkspaceGroup* group = output->workspaceGroup();
       if (state == nullptr || group == nullptr || group->active() == nullptr) {
         return;
       }
       const auto last = static_cast<double>(group->workspaceCount() - 1);
+      if (m_dragCard != nullptr) {
+        // Settle-only while a card drag is live: snap the rows (back to where the pan started on a cancel) and
+        // select nothing — the active workspace must not change under the held card. The drop then resolves under
+        // the pointer at the settled position; applyDrop activates its destination when it lands.
+        state->rowScroll.snap(
+            cancelled ? m_navigationStart
+                      : static_cast<double>(GesturePhysics::stepTarget(projected, 0, static_cast<int>(last)))
+        );
+        applyProgress();
+        refreshDragTarget();
+        return;
+      }
       const int index = cancelled ? static_cast<int>(group->active()->index())
                                   : GesturePhysics::stepTarget(projected, 0, static_cast<int>(last));
       // Rubber-banded travel moves the filmstrip slower than the fingers, so the release carries the visible speed.
@@ -3380,6 +3414,50 @@ namespace umbriel {
     if (m_dragCard != nullptr) {
       updateDrag(m_dragPointerX, m_dragPointerY);
     }
+  }
+
+  bool Overview::filmstripEdgeScrolling(Output& output, double speedPxPerSec) {
+    if (speedPxPerSec == 0) {
+      return false;
+    }
+    OutputState* state = stateFor(&output);
+    WorkspaceGroup* group = output.workspaceGroup();
+    if (state == nullptr || group == nullptr || group->workspaceCount() < 2) {
+      return false;
+    }
+    const double current = state->rowScroll.current();
+    const auto last = static_cast<double>(group->workspaceCount() - 1);
+    return speedPxPerSec < 0 ? current > 0 : current < last;
+  }
+
+  bool Overview::advanceFilmstripEdgeScroll(Output& output, double speedPxPerSec, uint32_t elapsedMsec) {
+    OutputState* state = stateFor(&output);
+    WorkspaceGroup* group = output.workspaceGroup();
+    PreviewMetrics metrics{};
+    if (state == nullptr
+        || group == nullptr
+        || elapsedMsec == 0
+        || !previewMetrics(*state, *m_server, zoom(), metrics)) {
+      return false;
+    }
+    // Neighbouring previews step one preview plus the gap along the workspace axis. The strip slides at
+    // speedPxPerSec world px/s (visible at zoom in the overview); convert so the filmstrip's visible slide matches.
+    const int step = (metrics.axis == WorkspaceAxis::Horizontal ? metrics.previewW : metrics.previewH) + metrics.gap;
+    if (step <= 0) {
+      return false;
+    }
+    const double rowsPerSec = speedPxPerSec * metrics.zoom / static_cast<double>(step);
+    const double current = state->rowScroll.current();
+    const auto last = static_cast<double>(group->workspaceCount() - 1);
+    const double next = std::clamp(current + rowsPerSec * static_cast<double>(elapsedMsec) / 1000.0, 0.0, last);
+    if (next == current) {
+      return false;
+    }
+    state->rowScroll.snap(next);
+    applyProgress();
+    // The rows moved under a stationary pointer: a live card drag must drop where it visibly sits now.
+    refreshDragTarget();
+    return true;
   }
 
   void Overview::updateDrag(double lx, double ly) {

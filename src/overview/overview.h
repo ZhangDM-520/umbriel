@@ -138,6 +138,14 @@ namespace umbriel {
     // Re-resolves the drop under the stationary drag pointer after the strip moved beneath it (edge auto-scroll or
     // finger-scroll pan). A no-op without a live card drag.
     void refreshDragTarget();
+    // Workspace-filmstrip twin of the layout-strip edge auto-scroll (input.drag_edge_scroll drives both during a
+    // held card drag): pan the rows along the workspace axis. speedPxPerSec is the edge ramp's signed screen-px/s;
+    // the filmstrip converts it to rows through the preview step so the visible slide matches the strip's.
+    // filmstripEdgeScrolling reports whether the rows can still move that way;
+    // advanceFilmstripEdgeScroll moves them over elapsedMsec, clamped at the ends, re-resolving the drop under the
+    // stationary drag pointer, and returns false when nothing moved.
+    [[nodiscard]] bool filmstripEdgeScrolling(Output& output, double speedPxPerSec);
+    bool advanceFilmstripEdgeScroll(Output& output, double speedPxPerSec, uint32_t elapsedMsec);
 
   private:
     static void onNavigationDeviceDestroyed(wl_listener* listener, void* data);
@@ -380,8 +388,11 @@ namespace umbriel {
     void scheduleFrames() const;
 
     [[nodiscard]] Card* cardAt(double lx, double ly);
+    // Hit-test a workspace preview. `forDragTarget` widens the boxes the way a drag needs them: along the scrolling
+    // axis over the whole output (overhanging cards), and to the output edges at both ends of the filmstrip (the
+    // extreme gaps were dead zones). Background clicks keep the narrow preview hitbox.
     [[nodiscard]] Workspace*
-    workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool extendScrollingAxis);
+    workspaceAtPoint(double lx, double ly, OutputState** outState, size_t* outIndex, bool forDragTarget);
     [[nodiscard]] WorkspaceGroup*
     workspaceGapAt(double lx, double ly, OutputState** outState, size_t* outIndex, wlr_box* outHintBox);
     [[nodiscard]] Workspace* preferredWorkspace() const;

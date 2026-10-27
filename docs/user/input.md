@@ -293,7 +293,7 @@ delay_ms = 100
 max_speed = 1500.0
 ```
 
-While a drag-and-drop, a tiled window move (Mod+left-click or the tab bar), or an overview window card drag is held near either end of a scrolling layout, the layout scrolls so offscreen columns can be reached.
+While a drag-and-drop, a tiled window move (Mod+left-click or the tab bar), or an overview window card drag is held near either end of a scrolling layout, the layout scrolls so offscreen columns can be reached. During an overview card drag the workspace rows also scroll at the ends of the [workspace axis](workspaces.md#workspace-axis), carrying the window to a far workspace with the same zones, delay, and speed ramp.
 
 | Key            | Range or values | Description                                                                              |
 | -------------- | --------------- | ---------------------------------------------------------------------------------------- |
