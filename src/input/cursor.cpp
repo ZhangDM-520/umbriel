@@ -4,6 +4,7 @@
 #include "core/log.h"
 #include "input/event_time.h"
 #include "input/gestures.h"
+#include "input/input_capture.h"
 #include "input/seat.h"
 #include "input/toplevel_drag.h"
 #include "input/xcursor_matcher.h"
@@ -291,6 +292,9 @@ namespace umbriel {
   }
 
   void Cursor::noteActivity() {
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr && (capture->capabilities() & 2U) != 0) {
+      return;
+    }
     if (m_cursorHidden) {
       m_cursorHidden = false;
       forwardEffectPointer();
@@ -1384,6 +1388,18 @@ namespace umbriel {
     noteActivity();
     m_server->notifyInputActivity();
 
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr) {
+      if (m_server->physicalInputDevice(&event->pointer->base)) {
+        if (capture->captureMotion(
+                event->time_msec, m_cursor->x, m_cursor->y, event->delta_x, event->delta_y, canCaptureInput()
+            )) {
+          return;
+        }
+      } else if ((capture->capabilities() & 2U) != 0) {
+        return;
+      }
+    }
+
     wlr_relative_pointer_manager_v1_send_relative_motion(
         m_server->relativePointerManager(), m_server->seat()->wlr(), static_cast<uint64_t>(event->time_msec) * 1000,
         event->delta_x, event->delta_y, event->unaccel_dx, event->unaccel_dy
@@ -1427,6 +1443,18 @@ namespace umbriel {
     double ly = 0;
     wlr_cursor_absolute_to_layout_coords(m_cursor, &event->pointer->base, event->x, event->y, &lx, &ly);
 
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr) {
+      if (m_server->physicalInputDevice(&event->pointer->base)) {
+        if (capture->captureAbsoluteMotion(
+                event->time_msec, m_cursor->x, m_cursor->y, lx, ly, canCaptureInput(), &event->pointer->base
+            )) {
+          return;
+        }
+      } else if ((capture->capabilities() & 2U) != 0) {
+        return;
+      }
+    }
+
     const double oldX = m_cursor->x;
     const double oldY = m_cursor->y;
     double dx = lx - m_cursor->x;
@@ -1444,7 +1472,43 @@ namespace umbriel {
 
   void Cursor::handleButton(void* data) {
     auto* event = static_cast<wlr_pointer_button_event*>(data);
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr && (capture->capabilities() & 2U) != 0) {
+      m_server->notifyIdleActivity();
+      if (m_server->physicalInputDevice(&event->pointer->base)) {
+        capture->captureButton(event->time_msec, event->button, event->state == WL_POINTER_BUTTON_STATE_PRESSED);
+      }
+      return;
+    }
     processButton(event->time_msec, event->button, event->state);
+  }
+
+  bool Cursor::canCaptureInput() const {
+    const wlr_seat* seat = m_server->seat()->wlr();
+    return isPassthrough()
+        && m_activeConstraint == nullptr
+        && !m_server->gestures()->movingContent()
+        && seat->pointer_state.button_count == 0
+        && seat->drag == nullptr
+        && seat->keyboard_state.grab == seat->keyboard_state.default_grab
+        && wl_list_empty(&seat->touch_state.touch_points)
+        && !m_server->sessionLocked()
+        && m_server->sessionLock() == nullptr
+        && (m_server->session() == nullptr || m_server->session()->active)
+        && (m_server->quitConfirm() == nullptr || !m_server->quitConfirm()->visible())
+        && (m_server->overview() == nullptr || !m_server->overview()->active())
+        && (m_server->cheatsheet() == nullptr || !m_server->cheatsheet()->visible());
+  }
+
+  void Cursor::setInputCaptured(bool captured) {
+    if (captured) {
+      cancelHotCorner();
+      m_server->cancelModifierTap();
+      clearPointerFocus();
+      hideCursor();
+    } else {
+      noteActivity();
+      refreshPointerFocus();
+    }
   }
 
   bool Cursor::isModRightDoubleClick(uint32_t timeMsec, const View* view) const {
@@ -1857,6 +1921,13 @@ namespace umbriel {
 
   void Cursor::handleAxis(void* data) {
     auto* event = static_cast<wlr_pointer_axis_event*>(data);
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr && (capture->capabilities() & 2U) != 0) {
+      m_server->notifyIdleActivity();
+      if (m_server->physicalInputDevice(&event->pointer->base)) {
+        capture->captureAxis(event->time_msec, event->orientation, event->delta, event->delta_discrete);
+      }
+      return;
+    }
     noteActivity();
     if (event->delta == 0 && event->delta_discrete == 0) {
       m_server->notifyIdleActivity();
@@ -2001,6 +2072,10 @@ namespace umbriel {
   }
 
   void Cursor::handleFrame() {
+    if (InputCapture* capture = m_server->inputCapture();
+        capture != nullptr && capture->captureFrame(monotonicMsec())) {
+      return;
+    }
     if (Overview* overview = m_server->overview()) {
       overview->handleTouchpadFrame();
     }
@@ -2038,6 +2113,9 @@ namespace umbriel {
   }
 
   void Cursor::handleTouchDown(void* data) {
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr) {
+      capture->suspend();
+    }
     auto* event = static_cast<wlr_touch_down_event*>(data);
     m_server->notifyInputActivity();
     m_server->cancelModifierTap();
@@ -2376,9 +2454,21 @@ namespace umbriel {
     double oldSx = 0;
     double oldSy = 0;
     View* oldView = m_server->viewAt(oldX, oldY, &oldSurface, &oldSx, &oldSy);
+    // A transient can open while the pointer remains over its parent. Refreshing hover within that ancestor must
+    // leave the child focused so the pointer can reach it; crossing back into the ancestor still transfers focus.
+    bool hoveredAncestor = false;
+    const View* focused = View::fromSurface(seat->keyboard_state.focused_surface);
+    if (!scrollRefocus && refocus && view == oldView && focused != nullptr && focused->workspace() == workspace) {
+      for (const View* parent = focused->transientParent(); parent != nullptr; parent = parent->transientParent()) {
+        if (parent == view) {
+          hoveredAncestor = true;
+          break;
+        }
+      }
+    }
     // Keyboard focus is an escape from rule confinement. While the pointer remains inside that window, an
     // invalidated hover must not immediately focus it again. A real re-entry (or a click) can still focus it.
-    const bool entered = view != oldView || (refocus && !ruleConstraintApplies(*view));
+    const bool entered = view != oldView || (refocus && !hoveredAncestor && !ruleConstraintApplies(*view));
     // Workspace focus is remembered independently from the seat. A pinned window from another workspace can own the
     // seat while this view remains its active workspace's remembered focus, so only seat-global activation of the
     // window that would take the keyboard (a dialog attached to this one) makes this handoff redundant.
@@ -2539,6 +2629,9 @@ namespace umbriel {
   }
 
   void Cursor::handleTabletToolAxis(void* data) {
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr) {
+      capture->suspend();
+    }
     auto* event = static_cast<wlr_tablet_tool_axis_event*>(data);
     noteActivity();
     m_server->notifyInputActivity();
@@ -2579,6 +2672,9 @@ namespace umbriel {
   }
 
   void Cursor::handleTabletToolProximity(void* data) {
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr) {
+      capture->suspend();
+    }
     auto* event = static_cast<wlr_tablet_tool_proximity_event*>(data);
     noteActivity();
     if (event->state == WLR_TABLET_TOOL_PROXIMITY_IN) {
@@ -2622,6 +2718,9 @@ namespace umbriel {
   }
 
   void Cursor::handleTabletToolTip(void* data) {
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr) {
+      capture->suspend();
+    }
     auto* event = static_cast<wlr_tablet_tool_tip_event*>(data);
     noteActivity();
     if (event->state == WLR_TABLET_TOOL_TIP_DOWN) {
@@ -2666,6 +2765,9 @@ namespace umbriel {
   }
 
   void Cursor::handleTabletToolButton(void* data) {
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr) {
+      capture->suspend();
+    }
     auto* event = static_cast<wlr_tablet_tool_button_event*>(data);
     noteActivity();
     if (event->state == WLR_BUTTON_PRESSED) {
@@ -3321,6 +3423,9 @@ namespace umbriel {
   void Cursor::clearPointerFocusOverridingGrab() { wlr_seat_pointer_clear_focus(m_server->seat()->wlr()); }
 
   void Cursor::refreshPointerFocus() {
+    if (InputCapture* capture = m_server->inputCapture(); capture != nullptr && (capture->capabilities() & 2U) != 0) {
+      return;
+    }
     double sx = 0;
     double sy = 0;
     wlr_surface* surface = nullptr;

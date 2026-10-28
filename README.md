@@ -70,6 +70,6 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 <p align="center">
   <a href="https://github.com/noctalia-dev/noctalia/stargazers">
-    <img src="https://api.noctalia.dev/stars/umbriel" alt="Star History" />
+    <img src="https://api.noctalia.dev/stars-animated/umbriel" alt="Star History" />
   </a>
 </p>

@@ -18,6 +18,36 @@ static const struct wlr_addon_interface buffer_addon_impl = {
     .destroy = handle_buffer_destroy,
 };
 
+GLuint fx_framebuffer_get_texture(struct fx_framebuffer* buffer) {
+  struct fx_renderer* renderer = buffer->renderer;
+  if (!renderer->procs.glEGLImageTargetTexture2DOES) {
+    return 0;
+  }
+
+  const bool initial = buffer->tex == 0;
+  if (initial) {
+    glGenTextures(1, &buffer->tex);
+    if (buffer->tex == 0) {
+      return 0;
+    }
+  }
+  // Owned buffers render into this texture itself. External textures observe
+  // producer updates on binding; other client buffers still need reimporting.
+  if (initial || (!buffer->external_only && !buffer->owned)) {
+    const GLenum target = buffer->external_only ? GL_TEXTURE_EXTERNAL_OES : GL_TEXTURE_2D;
+    glBindTexture(target, buffer->tex);
+    glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (initial && buffer->owned) {
+      glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+    renderer->procs.glEGLImageTargetTexture2DOES(target, buffer->image);
+    glBindTexture(target, 0);
+  }
+  return buffer->tex;
+}
+
 GLuint fx_framebuffer_get_fbo(struct fx_framebuffer* buffer) {
   if (buffer->external_only) {
     wlr_log(WLR_ERROR, "DMA-BUF format is external-only");
@@ -30,7 +60,18 @@ GLuint fx_framebuffer_get_fbo(struct fx_framebuffer* buffer) {
 
   push_fx_debug(buffer->renderer);
 
-  if (!buffer->rbo) {
+  if (buffer->owned) {
+    // Use one GL object for rendering and sampling so the driver tracks their
+    // ordering without aliasing separate EGLImage renderbuffer/texture siblings.
+    GLint previous_texture;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    const GLuint texture = fx_framebuffer_get_texture(buffer);
+    glBindTexture(GL_TEXTURE_2D, previous_texture);
+    if (texture == 0) {
+      pop_fx_debug(buffer->renderer);
+      return 0;
+    }
+  } else if (!buffer->rbo) {
     glGenRenderbuffers(1, &buffer->rbo);
     glBindRenderbuffer(GL_RENDERBUFFER, buffer->rbo);
     buffer->renderer->procs.glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, buffer->image);
@@ -39,7 +80,11 @@ GLuint fx_framebuffer_get_fbo(struct fx_framebuffer* buffer) {
 
   glGenFramebuffers(1, &buffer->fbo);
   glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, buffer->rbo);
+  if (buffer->owned) {
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer->tex, 0);
+  } else {
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, buffer->rbo);
+  }
   GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);

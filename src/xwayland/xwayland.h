@@ -6,10 +6,12 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <pixman.h>
 #include <string>
 #include <sys/types.h>
 #include <vector>
 #include <wayland-server-core.h>
+#include <xcb/xcb.h>
 
 struct wl_client;
 struct wl_global;
@@ -24,6 +26,8 @@ namespace umbriel {
 
   class Server;
   class XwaylandWindow;
+  class XwaylandShapes;
+  class XwaylandPrimary;
 
   // Configure the window as the client asked; fields the request leaves out keep their current value.
   void grantConfigureRequest(wlr_xwayland_surface* xsurface, const wlr_xwayland_surface_configure_event* event);
@@ -53,6 +57,11 @@ namespace umbriel {
     [[nodiscard]] const XwaylandOutputs& outputs() const { return *m_outputs; }
     // X pixels per layout unit in `surface`: the scale its X11 window is drawn at. 1 for every other surface.
     [[nodiscard]] double surfaceScale(wlr_surface* surface) const;
+    // Bounding shape in X surface-local coordinates. NULL means unshaped; an empty region cuts all pixels away.
+    // A new surface remains empty until its initial asynchronous query completes.
+    [[nodiscard]] const pixman_region32_t* surfaceShape(wlr_surface* surface) const;
+    // Emits wlr_surface* after a bounding-shape query or removal changes its rendering mask.
+    [[nodiscard]] wl_signal* shapeChanged() const;
     // Cursor surfaces have no wlr_xwayland_surface role. Identify them by the
     // Wayland client owned by this Xwayland server instead.
     [[nodiscard]] bool ownsSurface(const wlr_surface* surface) const;
@@ -60,12 +69,16 @@ namespace umbriel {
     [[nodiscard]] bool advertiseOutputManager(const wl_client* client, const wl_global* global) const;
     // Republishes the X screen and moves every X11 window to match it.
     void handleOutputLayoutChange();
+    // Resolves the configured primary monitor after a reload or output change.
+    void updatePrimaryOutput();
     // An Xwayland surface just yielded the keyboard to a native Wayland client. Clear both X focus channels after the
     // Wayland enter has reached the client, so the native client holds keyboard focus before X11 loses it.
     void scheduleFocusClear();
 
   private:
     static void onServerStart(wl_listener* listener, void* data);
+    static void onClientDestroy(wl_listener* listener, void* data);
+    static bool onXEvent(wlr_xwayland* xwayland, xcb_generic_event_t* event);
     static void onReady(wl_listener* listener, void* data);
     static void onNewSurface(wl_listener* listener, void* data);
     static void onKeyboardFocusChange(wl_listener* listener, void* data);
@@ -89,6 +102,8 @@ namespace umbriel {
     uint64_t m_inputSocketDevice = 0;
     uint64_t m_inputSocketInode = 0;
     std::unique_ptr<XwaylandOutputs> m_outputs;
+    std::unique_ptr<XwaylandShapes> m_shapes;
+    std::unique_ptr<XwaylandPrimary> m_primary;
     std::vector<std::unique_ptr<XwaylandWindow>> m_windows;
     uint32_t m_netActiveWindow = 0;
     // The XSETTINGS manager lives on the window manager's connection, so it neither keeps the lazy Xwayland running
@@ -101,6 +116,7 @@ namespace umbriel {
     wl_event_source* m_focusClearTimer = nullptr;
     wl_event_source* m_selectionRefreshTimer = nullptr;
     wl_listener m_serverStart{};
+    wl_listener m_clientDestroy{};
     wl_listener m_ready{};
     wl_listener m_newSurface{};
     wl_listener m_keyboardFocusChange{};

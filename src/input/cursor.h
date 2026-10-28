@@ -166,6 +166,8 @@ namespace umbriel {
     void handleOutputLayoutChange() const;
     [[nodiscard]] wlr_xcursor_manager* xcursorManager() const { return m_xcursorManager; }
     [[nodiscard]] bool isPassthrough() const;
+    [[nodiscard]] bool canCaptureInput() const;
+    void setInputCaptured(bool captured);
     [[nodiscard]] View* grabbedView() const;
     // True while `view` is under an interactive move and spans outputs
     // unclipped. Layout code must not re-clip it during the drag.

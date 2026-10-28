@@ -464,6 +464,8 @@ namespace umbriel {
     // Lets a modal dialog hang on its parent's frame (true, the default) or opens it as an ordinary window (false).
     std::optional<bool> attachToParent;
     std::optional<bool> confinePointer;
+    // Whether matching windows may activate client-requested keyboard shortcut inhibition (true by default).
+    std::optional<bool> allowShortcutsInhibit;
     // Keep a hidden window unsuspended and pace its frame callbacks at its output's refresh rate, for clients whose
     // non-rendering work stalls without them.
     std::optional<bool> backgroundRender;
@@ -532,6 +534,7 @@ namespace umbriel {
           && focusOnActivate == other.focusOnActivate
           && attachToParent == other.attachToParent
           && confinePointer == other.confinePointer
+          && allowShortcutsInhibit == other.allowShortcutsInhibit
           && backgroundRender == other.backgroundRender
           && vrr == other.vrr
           && allowTearing == other.allowTearing
@@ -579,6 +582,7 @@ namespace umbriel {
     std::optional<bool> focusOnActivate;
     std::optional<bool> attachToParent;
     std::optional<bool> confinePointer;
+    std::optional<bool> allowShortcutsInhibit;
     std::optional<bool> backgroundRender;
     std::optional<VrrMode> vrr;
     std::optional<bool> allowTearing;
@@ -1057,6 +1061,10 @@ namespace umbriel {
       bool xwaylandNativeResolution = false;
       // Run an XSETTINGS manager in Xwayland that announces the X screen scale and cursor theme. Requires restart.
       bool xwaylandXsettings = true;
+      // Connector or monitor identity to publish as the X11 primary. Empty leaves RandR unmanaged.
+      std::string xwaylandPrimaryOutput;
+      // Wait for composed NVIDIA output frames when no explicit synchronization timeline is available.
+      bool nvidiaSyncWorkaround = true;
       // Show the keybinds cheatsheet overlay on startup.
       bool showCheatsheet = true;
       // Honor activation requests by focusing and revealing the target window.

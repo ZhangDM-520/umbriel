@@ -66,8 +66,8 @@ The archive is linked as a whole so its internal utility symbols survive distrib
 - wlroots 0.20.1 or newer, and strictly below 0.21, built with session, libinput, and Xwayland support: `umbrielfx` compiles against wlroots' private struct layouts
 - wayland-server 1.24 or newer, plus the Wayland client library
 - wayland-protocols 1.47 or newer
-- xkbcommon
-- libinput 1.27 or newer
+- libxkbcommon 1.10.0 or newer (pkg-config: `xkbcommon`), required for server-side keyboard lock and latch updates
+- libinput 1.29 or newer
 - libeis 1.3 or newer (provided by libei)
 - libudev, required for native `[drm]` GPU exclusion support
 - libsystemd 243 or newer, required to read the systemd-localed keymap for keyboards with no XKB configuration
@@ -77,7 +77,7 @@ The archive is linked as a whole so its internal utility symbols survive distrib
 - Cairo and PangoCairo
 - tomlplusplus
 - nlohmann-json
-- xcb, xcb-icccm, and xcb-ewmh
+- xcb, xcb-icccm, xcb-ewmh, and xcb-shape
 - xcb-render, xcb-xfixes, xcb-xtest, and libei 1.3 or newer when the `tests` feature is enabled
 - EGL, GLES2, and GBM
 - lcms2, optional (the single `lcms2` meson feature option gates both ICC paths); without it `umbrielfx` rejects client ICC profiles and keeps only its parametric color transforms, and the compositor's ICC characterization for `color_profile` falls back to a warning plus the EDID chain
@@ -85,14 +85,16 @@ The archive is linked as a whole so its internal utility symbols survive distrib
 
 The canonical dependency declarations are in [`meson.build`](meson.build). Distribution package names vary.
 
+`xcb-shape` comes from libxcb and has no additional minimum-version requirement. Debian and Ubuntu split its build files into `libxcb-shape0-dev` and its runtime library into `libxcb-shape0`. On openSUSE, the existing `libxcb-devel` build package provides `xcb-shape.pc` and the headers; the runtime library is `libxcb-shape0`. Arch, Fedora, Alpine, Nix, Guix, and Void include the shape library in their existing libxcb package.
+
 ### Runtime dependencies
 
-| Dependency                                 | Role                                                                        |
-| ------------------------------------------ | --------------------------------------------------------------------------- |
-| `Xwayland`                                 | X11 application support when `general.xwayland` is enabled                  |
-| `xdg-desktop-portal-umbriel`               | Screencast and Screenshot portal interfaces for portal-based screen capture |
-| A usable font stack                        | Internal overlays and configuration diagnostics                             |
-| A Wayland-capable graphics and input stack | DRM or nested compositor operation through wlroots                          |
+| Dependency                                 | Role                                                       |
+| ------------------------------------------ | ---------------------------------------------------------- |
+| `Xwayland`                                 | X11 application support when `general.xwayland` is enabled |
+| `xdg-desktop-portal-umbriel`               | ScreenCast, Screenshot, and InputCapture portal backend    |
+| A usable font stack                        | Internal overlays and configuration diagnostics            |
+| A Wayland-capable graphics and input stack | DRM or nested compositor operation through wlroots         |
 
 `Xwayland` must be discoverable on `PATH`. It may be omitted when a package or installation deliberately disables Xwayland in the configuration.
 

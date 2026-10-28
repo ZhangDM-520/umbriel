@@ -24,6 +24,8 @@ struct fx_gles_render_pass {
   uint64_t signal_point;
   // A client reads the target right after submit (capture destinations).
   bool implicit_sync_target;
+  // A composed output swapchain buffer, rather than an internal or capture target.
+  bool output_target;
   bool has_color_transform;
   struct wlr_color_transform* color_transform;
   struct fx_offscreen_buffers* output_buffers;

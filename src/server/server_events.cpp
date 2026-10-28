@@ -6,6 +6,7 @@
 #include "input/cursor.h"
 #include "input/eis.h"
 #include "input/gestures.h"
+#include "input/input_capture.h"
 #include "input/keyboard.h"
 #include "input/keyboard_leds.h"
 #include "input/seat.h"
@@ -932,6 +933,12 @@ namespace umbriel {
     m_surfaceLayouts.clear();
     for (const auto& keyboard : m_keyboards) {
       keyboard->applyConfig();
+      if (m_inputCapture != nullptr && !keyboard->virtualDevice()) {
+        m_inputCapture->updateKeymap(keyboard->wlr());
+      }
+      // A rebuilt keymap can gain locks absent from its predecessor. Reapply
+      // shared state after the per-device restoration has finished.
+      refreshKeyboardLeds();
     }
     if (m_eisInput != nullptr) {
       m_eisInput->applyConfig();
@@ -976,6 +983,12 @@ namespace umbriel {
         m_overview->forceClose();
       }
       applyConfig(result.effects);
+      if (result.change.general) {
+        fx_renderer_set_nvidia_sync_workaround(m_renderer, config().general.nvidiaSyncWorkaround);
+        if (m_xwayland != nullptr) {
+          m_xwayland->updatePrimaryOutput();
+        }
+      }
       if (systemKeymapChanged && !result.effects.input) {
         applyKeyboardConfig();
       }
@@ -1520,8 +1533,8 @@ namespace umbriel {
     watch->destroy.notify = onShortcutsInhibitorDestroy;
     wl_signal_add(&inhibitor->events.destroy, &watch->destroy);
     self->m_shortcutsInhibitors.push_back(std::move(watch));
-    wlr_keyboard_shortcuts_inhibitor_v1_activate(inhibitor);
-    kLog.debug("keyboard shortcuts inhibitor activated");
+    self->refreshKeyboardShortcutsInhibitors();
+    kLog.debug("keyboard shortcuts inhibitor {}", inhibitor->active ? "activated" : "blocked by window rule");
   }
 
   void Server::onShortcutsInhibitorDestroy(wl_listener* listener, void* /*data*/) {
@@ -1538,6 +1551,12 @@ namespace umbriel {
     PointerDevice* watch;
     watch = wl_container_of(listener, watch, destroy);
     Server* server = watch->server;
+    if (server->m_inputCapture != nullptr) {
+      server->m_inputCapture->forgetAbsoluteDevice(watch->device);
+      if ((server->m_inputCapture->capabilities() & 2U) != 0) {
+        server->m_inputCapture->suspend();
+      }
+    }
     wl_list_remove(&watch->destroy.link);
     std::erase_if(server->m_pointers, [watch](const std::unique_ptr<PointerDevice>& pointer) {
       return pointer.get() == watch;
@@ -1946,6 +1965,12 @@ namespace umbriel {
   }
 
   void Server::beginSessionLock(wlr_session_lock_v1* lock) {
+    if (m_inputCapture != nullptr) {
+      m_inputCapture->suspend();
+    }
+    if (m_pendingCaptureId != 0) {
+      dismissConfirmation();
+    }
     if (m_sessionLock != nullptr) {
       kLog.info("denying session lock; one is already active");
       wlr_session_lock_v1_destroy(lock);
@@ -1972,6 +1997,9 @@ namespace umbriel {
       }
 
       dismissConfirmation();
+      if (m_inputCapture != nullptr) {
+        m_inputCapture->suspend();
+      }
       if (m_eisInput != nullptr) {
         m_eisInput->setSessionLocked(true);
       }
@@ -2110,7 +2138,10 @@ namespace umbriel {
     if (!seatHasKeyboard && keyboard->wlr()->keymap != nullptr) {
       wlr_seat_set_keyboard(seat, keyboard->wlr());
     }
-    m_keyboardLeds->add(keyboard->wlr(), keyboard->virtualDevice());
+    m_keyboardLeds->add(keyboard->wlr(), keyboard->virtualDevice(), config().input.keyboard.numlockToggle);
+    if (m_inputCapture != nullptr && !keyboard->virtualDevice()) {
+      m_inputCapture->addKeyboard(keyboard->wlr());
+    }
   }
 
   bool Server::cycleKeyboardLayout() {
@@ -3530,6 +3561,9 @@ namespace umbriel {
   }
 
   void Server::notifyKeyboardEnter(wlr_surface* surface, KeyboardGrab grab) {
+    if (m_inputCapture != nullptr && (m_inputCapture->capabilities() & 1U) != 0) {
+      return;
+    }
     wlr_seat* seat = m_seat->wlr();
     wlr_surface* previous = seat->keyboard_state.focused_surface;
     const bool leavesXwayland = m_xwayland != nullptr
@@ -3632,13 +3666,13 @@ namespace umbriel {
   void Server::rememberKeyboardInputSource(Keyboard& keyboard) {
     if (m_inputMethodRelay == nullptr || !m_inputMethodRelay->ownsKeyboard(keyboard.wlr())) {
       m_keyboardInputSource = &keyboard;
-      if (!m_stopping && m_keyboardLeds != nullptr) {
-        m_keyboardLeds->update(keyboard.wlr());
-      }
-    } else {
-      refreshKeyboardLeds();
+    }
+    if (!m_stopping && m_keyboardLeds != nullptr) {
+      m_keyboardLeds->update(keyboard.wlr());
     }
   }
+
+  bool Server::syncingKeyboardLocks() const { return m_keyboardLeds != nullptr && m_keyboardLeds->syncing(); }
 
   void Server::refreshKeyboardLeds() {
     if (!m_stopping && m_keyboardLeds != nullptr) {
@@ -3647,6 +3681,9 @@ namespace umbriel {
   }
 
   void Server::removeKeyboard(Keyboard* keyboard) {
+    if (m_inputCapture != nullptr) {
+      m_inputCapture->removeKeyboard(keyboard->wlr());
+    }
     wlr_seat* seat = m_seat->wlr();
     const bool seatKeyboardRemoved = wlr_seat_get_keyboard(seat) == keyboard->wlr();
     const bool sourceRemoved = m_keyboardLayoutSource == keyboard;
@@ -3761,11 +3798,17 @@ namespace umbriel {
     if (self->m_eisInput != nullptr) {
       self->m_eisInput->updateOutputs();
     }
+    if (self->m_inputCapture != nullptr) {
+      self->m_inputCapture->updateOutputs();
+    }
   }
 
   void Server::updateOutputManagerConfig() {
     // Every output state change that output management publishes also changes the IPC output listing.
     scheduleIpcOutputsEvent();
+    if (m_inputCapture != nullptr && !m_deferOutputManagerConfig) {
+      m_inputCapture->updateOutputs();
+    }
     if (m_outputManager == nullptr || m_deferOutputManagerConfig) {
       return;
     }
@@ -3899,6 +3942,18 @@ namespace umbriel {
       return true;
     };
 
+    const auto commitSceneStates = [this](wlr_backend_output_state* pending, size_t pendingLen) {
+      std::vector<std::unique_ptr<Output::SceneCommit>> observations;
+      observations.reserve(pendingLen);
+      for (size_t i = 0; i < pendingLen; ++i) {
+        if (Output* output = outputFromWlr(pending[i].output)) {
+          observations.push_back(std::make_unique<Output::SceneCommit>(*output, pending[i].base));
+        }
+      }
+      // Each output's successful commit event is authoritative even if a later child backend fails the group.
+      return wlr_backend_commit(m_backend, pending, pendingLen);
+    };
+
     struct BackendSnapshot {
       wlr_output* output = nullptr;
       bool enabled = false;
@@ -3966,7 +4021,7 @@ namespace umbriel {
         // logical layout transaction is complete.
         m_deferOutputManagerConfig = true;
         commitAttempted = true;
-        ok = wlr_backend_commit(m_backend, states, statesLen);
+        ok = commitSceneStates(states, statesLen);
         if (ok) {
           wlr_output_swapchain_manager_apply(&swapchainManager);
         }
@@ -3986,7 +4041,7 @@ namespace umbriel {
             wlr_output_swapchain_manager_prepare(&rollbackManager, rollbackStates.data(), rollbackStates.size());
         if (restoredAsGroup) {
           restoredAsGroup = buildSceneStates(rollbackManager, rollbackStates.data(), rollbackStates.size())
-              && wlr_backend_commit(m_backend, rollbackStates.data(), rollbackStates.size());
+              && commitSceneStates(rollbackStates.data(), rollbackStates.size());
         }
         if (restoredAsGroup) {
           wlr_output_swapchain_manager_apply(&rollbackManager);
@@ -4000,7 +4055,8 @@ namespace umbriel {
         }
         rollbackStates.clear();
 
-        const auto restoreEnabled = [this, &buildSceneStates, &stageSnapshot](const BackendSnapshot& snapshot) {
+        const auto restoreEnabled = [this, &buildSceneStates, &commitSceneStates,
+                                     &stageSnapshot](const BackendSnapshot& snapshot) {
           wlr_backend_output_state restore{};
           restore.output = snapshot.output;
           wlr_output_state_init(&restore.base);
@@ -4010,7 +4066,7 @@ namespace umbriel {
           wlr_output_swapchain_manager_init(&manager, m_backend);
           bool restored = wlr_output_swapchain_manager_prepare(&manager, &restore, 1);
           if (restored) {
-            restored = buildSceneStates(manager, &restore, 1) && wlr_backend_commit(m_backend, &restore, 1);
+            restored = buildSceneStates(manager, &restore, 1) && commitSceneStates(&restore, 1);
           }
           if (restored) {
             wlr_output_swapchain_manager_apply(&manager);

@@ -221,6 +221,10 @@ sudo meson install -C build-release --no-rebuild
 
 The release binary is written to `build-release/umbriel`. `just debug` builds the debug binary at `build-debug/umbriel`.
 
+libxkbcommon 1.10.0 or newer is required at build time and runtime. Its pkg-config name is `xkbcommon`; Umbriel uses its server-side modifier API to preserve keyboard locks and latches.
+
+X11 window shapes require the `xcb-shape` library from libxcb. Debian and Ubuntu need `libxcb-shape0-dev` for building and `libxcb-shape0` at runtime. On openSUSE, `libxcb-devel` provides the build files and `libxcb-shape0` provides the runtime library. Arch, Fedora, Alpine, Nix, Guix, and Void bundle the shape library with libxcb.
+
 `jemalloc` is optional and recommended on glibc. Meson's default `-Djemalloc=auto` uses it when the development package is installed. Use `-Djemalloc=enabled` or `-Djemalloc=disabled` to force the choice. The `auto` setting skips it on non-glibc systems.
 
 The default installation prefix is `/usr/local`. Meson stores the prefix when the build directory is configured. To install under your home directory, configure that prefix explicitly before building, including when reusing an existing build directory:
@@ -281,6 +285,8 @@ Run `umbriel` directly only for a nested development session or an explicitly un
 ## Screen sharing
 
 Screen sharing in Discord, browsers, and other portal-aware applications needs [`xdg-desktop-portal-umbriel`](https://github.com/noctalia-dev/xdg-desktop-portal-umbriel).
+
+On rotated or flipped outputs, the shared cursor may appear offset because of a wlroots 0.20.2 cursor metadata issue.
 
 ### Picker missing after login
 

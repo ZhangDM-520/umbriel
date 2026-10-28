@@ -23,6 +23,9 @@ unit_tests = [
   ['modifier-tap', ['unit/modifier_tap.cpp'], []],
   ['keyboard-layout', ['unit/keyboard_layout.cpp'], []],
   ['keyboard-leds', ['unit/keyboard_leds.cpp'], [wayland_server_dep]],
+  ['keyboard-state', ['unit/keyboard_state.cpp'], [wayland_server_dep]],
+  ['input-capture-geometry', ['unit/input_capture_geometry.cpp'], []],
+  ['input-capture-permissions', ['unit/input_capture_permissions.cpp'], [umbriel_core_dep]],
   ['eis-socket', ['unit/eis_socket.cpp'], [umbriel_core_dep, wayland_server_dep]],
   ['surface-layouts', ['unit/surface_layouts.cpp'], []],
   ['shortcuts-inhibit', ['unit/shortcuts_inhibit.cpp'], []],
@@ -402,6 +405,31 @@ xwayland_focus_client = executable(
   dependencies: [xcb_dep],
 )
 
+xwayland_output_client = executable(
+  'xwayland-output-client',
+  ['harness/clients/xwayland_output_client.cpp'],
+  dependencies: [xcb_dep, xcb_randr_dep, nlohmann_json_dep],
+)
+
+# An idle X11 client for controlled first-buffer and association ordering.
+xwayland_association_client = executable(
+  'xwayland-association-client',
+  ['harness/clients/xwayland_association_client.cpp'],
+  dependencies: [xcb_dep],
+)
+
+xwayland_dialog_client = executable(
+  'xwayland-dialog-client',
+  ['harness/clients/xwayland_dialog_client.cpp'],
+  dependencies: [xcb_dep],
+)
+
+xwayland_popup_client = executable(
+  'xwayland-popup-client',
+  ['harness/clients/xwayland_popup_client.cpp'],
+  dependencies: [xcb_dep],
+)
+
 xwayland_input_client = executable(
   'xwayland-input-client',
   ['harness/clients/xwayland_input_client.cpp'],
@@ -419,6 +447,13 @@ xwayland_selection_client = executable(
   'xwayland-selection-client',
   ['harness/clients/xwayland_selection_client.cpp'],
   dependencies: [xcb_dep, dependency('xcb-xfixes')],
+)
+
+# ARGB windows whose bounding and input shapes change independently.
+xwayland_shape_client = executable(
+  'xwayland-shape-client',
+  ['harness/clients/xwayland_shape_client.cpp'],
+  dependencies: [xcb_dep, xcb_shape_dep],
 )
 
 # Harness pair that proves only Xwayland-owned theme cursor surfaces are
@@ -482,7 +517,21 @@ capture_client = executable(
   dependencies: [wayland_client_dep],
 )
 
+# Uses real backend devices in an isolated compositor to verify physical consent.
+input_capture_compositor = executable(
+  'input-capture-compositor',
+  ['harness/clients/input_capture_compositor.cpp'],
+  dependencies: [umbriel_core_dep],
+)
+input_capture_client = executable(
+  'input-capture-client',
+  ['harness/clients/input_capture_client.cpp', input_capture_client_h, input_capture_protocol_c],
+  dependencies: [wayland_client_dep, dependency('libei-1.0', version: '>=1.3')],
+)
+
 harness_client_targets = [
+  input_capture_compositor,
+  input_capture_client,
   color_feedback_client,
   pixel_probe,
   capture_client,
@@ -506,9 +555,14 @@ harness_client_targets = [
   security_context_client,
   seat_log_client,
   xwayland_focus_client,
+  xwayland_output_client,
+  xwayland_association_client,
+  xwayland_dialog_client,
+  xwayland_popup_client,
   xwayland_input_client,
   ei_peer_client,
   xwayland_selection_client,
+  xwayland_shape_client,
   xwayland_cursor_client,
   xsettings_client,
   wayland_cursor_client,

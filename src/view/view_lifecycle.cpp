@@ -539,7 +539,7 @@ namespace umbriel {
     }
   }
 
-  void View::handleUnmap() {
+  void View::handleUnmap(bool animateClose) {
     m_server->seat()->toplevelDrags().unmapped(this);
     if (m_effectSelectionIdle != nullptr) {
       wl_event_source_remove(m_effectSelectionIdle);
@@ -609,10 +609,10 @@ namespace umbriel {
       m_server->scratchpadManager()->remove(this);
     }
     if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
-      overview->onViewUnmapped(this);
+      overview->onViewUnmapped(this, animateClose);
     }
     // Replacement focus can hide the closing tab. Capture while its current visibility still decides eligibility.
-    const CloseSnapshotId snapshot = beginCloseAnimation();
+    const CloseSnapshotId snapshot = animateClose ? beginCloseAnimation() : kInvalidCloseSnapshot;
     // After the close capture, so a minimized window closes unseen. The live node is not re-enabled: a remap shows the
     // window normally.
     if (m_minimized) {
@@ -820,6 +820,7 @@ namespace umbriel {
       const wlr_box captureClip = geometryBox();
       wlr_scene_subsurface_tree_set_clip(&m_captureScene->tree.node, &captureClip);
     }
+    syncXwaylandShape();
     if (openingConfigurePending() || reconfigureOpeningState) {
       // Resolve window rules early to influence initial tiled/float decision and size.
       WindowRuleState openingState = ruleState();
@@ -1126,7 +1127,7 @@ namespace umbriel {
     for (wl_listener* listener :
          {&m_map, &m_unmap, &m_commit, &m_destroy, &m_requestMove, &m_requestResize, &m_requestMaximize,
           &m_requestMinimize, &m_requestFullscreen, &m_setParent, &m_setTitle, &m_setAppId, &m_xRequestConfigure,
-          &m_xRequestActivate, &m_xSetHints, &m_setDecorations}) {
+          &m_xRequestActivate, &m_xSetHints, &m_xShapeChanged, &m_setDecorations}) {
       removeListener(*listener);
     }
     m_sceneTree->node.data = nullptr;

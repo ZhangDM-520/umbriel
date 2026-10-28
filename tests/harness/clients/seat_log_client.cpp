@@ -87,6 +87,7 @@ namespace {
     bool useTextInput = false;
     bool lateTextInputState = false;
     bool logModifiers = false;
+    bool logPointerInput = false;
     // Surface-local pointer position from the latest enter or motion.
     double pointerX = 0;
     double pointerY = 0;
@@ -272,6 +273,9 @@ namespace {
     const bool moved = state.pointerX != wl_fixed_to_double(sx) || state.pointerY != wl_fixed_to_double(sy);
     state.pointerX = wl_fixed_to_double(sx);
     state.pointerY = wl_fixed_to_double(sy);
+    if (state.logPointerInput) {
+      std::println("pointer-motion x={:.3f} y={:.3f}", state.pointerX, state.pointerY);
+    }
     if (state.moveSerial && !state.actionRequested && moved) {
       state.actionRequested = true;
       xdg_toplevel_move(state.toplevel, state.seat, *state.moveSerial);
@@ -307,7 +311,11 @@ namespace {
     }
   }
 
-  void pointerAxis(void*, wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {}
+  void pointerAxis(void* data, wl_pointer*, uint32_t, uint32_t axis, wl_fixed_t value) {
+    if (static_cast<State*>(data)->logPointerInput) {
+      std::println("pointer-axis axis={} value={:.3f}", axis, wl_fixed_to_double(value));
+    }
+  }
   void pointerFrame(void*, wl_pointer*) {}
   void pointerAxisSource(void*, wl_pointer*, uint32_t) {}
   void pointerAxisStop(void*, wl_pointer*, uint32_t, uint32_t) {}
@@ -517,6 +525,7 @@ int main(int argc, char** argv) {
   state.useTextInput = std::getenv("ENABLE_TEXT_INPUT") != nullptr;
   state.lateTextInputState = std::getenv("TEXT_INPUT_LATE_STATE") != nullptr;
   state.logModifiers = std::getenv("LOG_MODIFIERS") != nullptr;
+  state.logPointerInput = std::getenv("LOG_POINTER_INPUT") != nullptr;
   if (mode == "move-on-press") {
     state.pressAction = PressAction::Move;
   } else if (mode == "move-on-motion") {
@@ -551,6 +560,9 @@ int main(int argc, char** argv) {
   state.toplevel = xdg_surface_get_toplevel(state.xdgSurface);
   xdg_toplevel_add_listener(state.toplevel, &kToplevelListener, &state);
   xdg_toplevel_set_title(state.toplevel, title);
+  if (const char* appId = std::getenv("SEAT_LOG_APP_ID")) {
+    xdg_toplevel_set_app_id(state.toplevel, appId);
+  }
   if (state.shortcutsControl || std::getenv("INHIBIT_SHORTCUTS") != nullptr) {
     if (state.shortcutsInhibitManager == nullptr) {
       std::println(stderr, "seat-log-client: compositor is missing zwp_keyboard_shortcuts_inhibit_manager_v1");

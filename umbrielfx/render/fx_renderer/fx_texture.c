@@ -403,29 +403,17 @@ static struct wlr_texture* fx_texture_from_framebuffer(
   wlr_egl_make_current(renderer->egl, &prev_ctx);
   push_fx_debug(texture->fx_renderer);
 
-  bool invalid;
-  if (!buffer->tex) {
-    glGenTextures(1, &buffer->tex);
-    invalid = true;
-  } else {
-    // External textures observe producer updates automatically. Other client
-    // buffers need refreshing, but owned EGLImage siblings share this context's
-    // rendering updates without reattaching their storage.
-    invalid = !buffer->external_only && !buffer->owned;
-  }
-
-  if (invalid) {
-    glBindTexture(texture->target, buffer->tex);
-    glTexParameteri(texture->target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(texture->target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    renderer->procs.glEGLImageTargetTexture2DOES(texture->target, buffer->image);
-    glBindTexture(texture->target, 0);
-  }
+  const GLuint tex = fx_framebuffer_get_texture(buffer);
 
   pop_fx_debug(texture->fx_renderer);
   wlr_egl_restore_context(&prev_ctx);
 
-  texture->tex = buffer->tex;
+  if (tex == 0) {
+    wl_list_remove(&texture->link);
+    free(texture);
+    return NULL;
+  }
+  texture->tex = tex;
   texture->locked_buffer = wlr_buffer_lock(locked_buffer);
   return &texture->wlr_texture;
 }

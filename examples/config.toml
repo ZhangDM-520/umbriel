@@ -31,6 +31,11 @@ files = []
 # Umbriel announces the X11 interface scale and cursor theme through XSETTINGS.
 # Turn this off to run your own manager, such as xsettingsd.
 # xwayland_xsettings = false
+# Select the monitor X11 games use as primary, using a connector or monitor identity from `umbriel outputs`.
+# xwayland_primary_output = "DP-1"
+# NVIDIA outputs without explicit synchronization wait for GPU rendering by default.
+# Disable this workaround if it causes stuttering or frame drops.
+# nvidia_sync_workaround = false
 # Modal dialogs hang on their parent window and follow it. Turn this off to keep them ordinary windows.
 # attach_modal_dialogs = false
 
@@ -126,7 +131,7 @@ radius = 3
 
 # ==============================================================================
 # Input
-# Enable NumLock when a physical keyboard connects.
+# Enable NumLock for the first physical keyboard; later devices inherit current locks.
 # https://docs.noctalia.dev/umbriel/input/
 #
 # [input]
@@ -314,6 +319,11 @@ default_pinned = true
 # [[window_rule]]
 # match.app_id = "^steam_app_.*$"
 # confine_pointer = true
+
+# Keep compositor shortcuts available while a virtual machine window is focused.
+# [[window_rule]]
+# match.app_id = "^virt-manager$"
+# allow_shortcuts_inhibit = false
 
 # Keep an application drawing while it is hidden on another workspace, for programs whose other work stalls without it.
 # [[window_rule]]

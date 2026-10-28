@@ -52,6 +52,10 @@ The state changes when the window is dropped. Unsupported transitions, such as p
 
 Umbriel supports `xdg-toplevel-drag-v1` for native Wayland applications that implement it, including Chromium-based browsers. During a pointer drag, a detached window follows the pointer above ordinary windows and stays outside the tiling layout. Windows underneath it can receive the drop, allowing the application to merge a tab or dock a panel. If the application keeps the detached window after the drop, Umbriel places it using normal tiled or floating window-drag behavior. No additional configuration is needed.
 
+### Input capture
+
+The InputCapture portal supports approved keyboard and pointer sharing through `xdg-desktop-portal-umbriel`. It provides screen-edge activation, keyboard events and modifiers, pointer motion, buttons, and scrolling. Press **Ctrl+Alt+Escape** to restore local control. Applications can request optional remembered approval through restore tokens. Clipboard sharing, touch, tablet, and gesture capture are not supported. See [Input capture](security.md#input-capture) for the complete support table and permission behavior.
+
 ### Keyboard
 
 ```toml
@@ -70,7 +74,7 @@ track_layout = "global"
 | ---------------- | ------------------------ | -------------------------------------------------- |
 | `repeat_rate`    | 0 to 1000 Hz             | Key repeats per second; `0` disables repeat.       |
 | `repeat_delay`   | 0 to 10000 ms            | Delay before a held key repeats.                   |
-| `numlock_toggle` | bool                     | Enable NumLock when a keyboard connects.           |
+| `numlock_toggle` | bool                     | Enable NumLock for the first physical keyboard.    |
 | `track_layout`   | `"global"` or `"window"` | Choose session-wide or per-window layout tracking. |
 
 Use a comma-separated layout list to configure several layouts:
@@ -100,7 +104,11 @@ Bind `keyboard-layout-next` to cycle configured physical keyboard layouts:
 
 When an input method removes its virtual keyboard, Umbriel restores the keyboard that supplied the input. Held shortcut modifiers stay active until they are released, even when another connected keyboard is idle.
 
-Lock-key LEDs follow the active input source across physical keyboards, including newly connected devices. This keeps keyboard lights and LED-based lock-key OSDs working when an application forwards input through a uinput keyboard without LED feedback, such as a screen recorder's global-hotkey helper.
+Physical keyboards share lock state, including uinput keyboards without LED feedback, such as a screen recorder's global-hotkey helper or a mouse's auxiliary keyboard interface. Toggling a lock on one device updates the others before they process further input. Ordinary keys from another device leave NumLock, CapsLock, and ScrollLock unchanged, and their LEDs reflect the shared state.
+
+Configuration reloads preserve locks. An unchanged keymap also retains held-key and latch state; a changed keymap restores locks and latched modifiers by name. Newly connected keyboards inherit the current locks, even after all previous keyboards have disconnected. `numlock_toggle` supplies the initial NumLock state rather than overriding later user choices during hotplug or reload.
+
+Wayland virtual keyboards retain their client-provided keymap and modifier state. Their lock changes update the shared state without replacing unrelated locks with a stale snapshot. Input-method echoes do not change shared locks.
 
 #### Tracking the layout per window
 
@@ -314,6 +322,8 @@ hover_raises = true
 ```
 
 `follows_mouse = true` focuses the window that the pointer enters through real pointer motion. Scrolling or dragging a layout beneath a stationary pointer does not change focus. After explicit layout scrolling settles, the next real pointer motion can focus the window beneath it without a border crossing. Pointer motion during scrolling does not change focus. Consume and expel commands also let the next pointer motion refresh focus after rearranging windows. This follows the actual seat focus across tiled, floating, and pinned windows, including pinned windows whose owning workspace is inactive.
+
+When a dialog has focus, motion within the parent window beneath the pointer keeps the dialog focused so the pointer can reach it. This applies to floating dialogs and lets tiled dialogs finish scrolling into view. Crossing back into the parent from another window, clicking it, or choosing it with a focus command still transfers focus to the parent. This behavior is the same with either value of `hover_raises`.
 
 `hover_raises = false` narrows hovering to focus alone: the entered window does not move above its neighbors, so sweeping the pointer across a larger window underneath cannot bury the window above it. Clicks, keybinds, and activation still raise. The key only matters with `follows_mouse = true`, and defaults to `true`.
 

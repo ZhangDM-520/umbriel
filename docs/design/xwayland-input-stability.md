@@ -2,6 +2,36 @@
 
 Umbriel supports X11 clients through wlroots' Xwayland server: managed X11 windows are views, and the compositor tells the X server where each one sits on screen. X11 games are sensitive to compositor-side geometry churn, and several Umbriel invariants exist to keep it away from them. Breaking any of these reintroduces a bug class where an X11 game's mouse input dies in part of the screen while everything looks correct.
 
+## Association catches up with the first buffer
+
+Xwayland sends window association messages over the X11 connection and surface commits over its Wayland connection. The first committed buffer can therefore arrive before the XWM associates that surface with its X11 window. wlroots installs its mapping commit listener during association, so it can miss that first buffer and leave the surface unmapped. An idle application can then wait indefinitely for a frame callback from a surface that never entered the scene. The X window remains viewable and in the stacking list while `_NET_CLIENT_LIST` and Umbriel's window list omit it.
+
+`XwaylandWindow::handleAssociate` creates the managed or unmanaged wrapper and installs its listeners before checking the currently associated surface. If that surface has a committed buffer and is still unmapped, it calls `wlr_surface_map` immediately. This delivers the same map signal to wlroots and Umbriel that a later buffer commit would deliver, including the client-list update. Pending buffers are left to the normal commit path, and an already mapped surface receives no duplicate map signal. Dissociation still unmaps and destroys the wrapper before another association is handled.
+
+`protocol/xwayland_association` exercises real Xwayland with an idle X11 client and a proxy on its private XWM connection. The proxy holds the selected association message while Wayland traffic continues. The check waits for the first buffer import, releases association, and requires the existing buffer to map without a redraw. It also checks ordinary ordering, managed window withdrawal and remapping, and rendered pixels from a delayed unmanaged window. Removing the catch-up must fail the delayed mapping transition.
+
+## Popup classification follows live X11 metadata
+
+Override-redirect windows and windows typed as popup menus, dropdowns, tooltips, combo popups, or drag icons use `XwaylandUnmanaged`. They keep client placement and bypass managed window rules. EWMH `_NET_WM_WINDOW_TYPE_MENU` describes a persistent torn-off menu, so that type remains managed unless override-redirect is set. Its window rules, workspace membership, overview card, and IPC identity follow normal managed behavior. `XwaylandWindow` watches both override-redirect and window-type changes, switching wrappers immediately when their classification changes, including while mapped. Metadata updates that keep the same classification preserve the current wrapper.
+
+While managed, the window retains its client-requested X11 rectangle separately from compositor layout configures. Conversion to a popup restores that rectangle and clears maximize and fullscreen state. Direct client geometry changes accompanying an override-redirect transition are retained. Returning to managed classification seeds the saved rectangle from current popup geometry and applies normal opening policy.
+
+Wrapper changes preserve the Wayland surface's mapped state. A retiring View runs full unmap cleanup before destruction, including layout, focus, cursor grabs, effects, and overview cards, without creating desktop or overview close snapshots. A replacement View enters the registry before catching up with an already mapped surface. The XWM focus record is retired only on real dissociation, allowing a reused X window to take real X input focus on remap while preserving client focus transfers during live wrapper changes. Dissociation also schedules the deferred native focus clear, so retiring an old popup cannot leave X input focus at `PointerRoot` while a native window owns the seat.
+
+[`protocol/xwayland_popup_classification`](../../tests/harness/checks/protocol/xwayland_popup_classification.sh) exercises real Xwayland transitions under broad tiling and maximize rules. It checks pre-map popup metadata, persistent `MENU` windows remaining managed, mapped type and override-redirect changes, geometry recovery without a new client configure, cleared maximize and fullscreen state, rendered pixels, keyboard input, overview card removal, return to managed classification, remapping, and native focus retention after popup withdrawal. Run it as `just check protocol/xwayland_popup_classification`.
+
+## Bounding shapes constrain scene coverage
+
+An X11 bounding shape can contain holes or disconnected rectangles. Xwayland exports the window's rectangular backing buffer without applying that mask to its alpha. Pixels outside the shape can therefore be opaque black, even for an ARGB window with a transparent background. Reading the window with XGetImage does not establish backing-buffer alpha: Xwayland can zero the returned pixels outside its visible region.
+
+`XwaylandShapes` reads `ShapeBounding` on the existing XWM connection and listens for bounding `ShapeNotify` events. Extension discovery and shape replies are asynchronous. Initial queries keep the surface clipped to an empty region until discovery completes; live queries retain the previous mask. A private wakeup event ensures wlroots drains X events that reply polling may have queued. The tracker owns no additional X connection, so it preserves lazy Xwayland shutdown and resets when that server exits.
+
+UmbrielFX stores arbitrary node clips in addons, preserving its scene ABI. A null clip is unrestricted; an empty region hides the node. Region clips intersect existing rectangular clips and constrain drawing, opaque occlusion, damage, output membership, and hit testing. Clipped buffers cannot bypass those regions through direct scanout.
+
+For managed windows, `applySurfaceShape` projects the surface-local X region through the buffer's current source crop and destination size. The same projection applies to isolated capture scenes and overview copies. Masks are copied with close-animation buffers, and blur is confined to the corresponding visible region. Native-resolution X pixels are converted through the drawn scene geometry; output and layout geometry remain logical coordinates. Unmanaged X11 windows refresh their mask after shape, scale, and surface-state changes. Input shapes are handled independently and never serve as drawing masks.
+
+The region primitive is covered by `tests/unit/scene_clip.cpp`. Run `just check protocol/xwayland_shape` for real Xwayland framebuffer, overview, and window-capture transitions at scales 1 and 2. The check preserves painted pixels while shrinking and restoring the shape, so an opaque backing buffer cannot pass through an unrelated alpha fallback. Window capture uses XRGB, so removed widgets become black in that isolated capture while the desktop shows through them on the output.
+
 ## Output membership follows real geometry
 
 wlroots emits enter/leave from scene-node visibility with a 10% overlap threshold, and scale-aware clients size and map input from the outputs a surface entered. Two situations cross that threshold:

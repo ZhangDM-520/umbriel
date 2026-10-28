@@ -322,6 +322,8 @@ namespace umbriel {
           boolean("xwayland", &G::xwayland),
           boolean("xwayland_native_resolution", &G::xwaylandNativeResolution),
           boolean("xwayland_xsettings", &G::xwaylandXsettings),
+          registry::text("xwayland_primary_output", &G::xwaylandPrimaryOutput),
+          boolean("nvidia_sync_workaround", &G::nvidiaSyncWorkaround),
           boolean("show_cheatsheet", &G::showCheatsheet),
           boolean("focus_on_activate", &G::focusOnActivate),
           boolean("attach_modal_dialogs", &G::attachModalDialogs),

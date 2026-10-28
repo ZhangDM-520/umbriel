@@ -1,5 +1,6 @@
 #include "config/config.h"
 #include "input/cursor.h"
+#include "input/input_capture.h"
 #include "input/keyboard.h"
 #include "input/seat.h"
 #include "input/text_input.h"
@@ -60,6 +61,9 @@ namespace umbriel {
       return false;
     }
 
+    if (m_inputCapture != nullptr) {
+      m_inputCapture->suspend();
+    }
     if (!wlr_session_change_vt(m_session, vt)) {
       wlr_log(WLR_ERROR, "failed to switch to VT %u", vt);
     }
@@ -221,10 +225,29 @@ namespace umbriel {
     if (!m_sessionLocked && m_manualShortcutsInhibit.enabled(focused)) {
       return true;
     }
-    return focused != nullptr && std::ranges::any_of(m_shortcutsInhibitors, [seat, focused](const auto& watch) {
+    return focused != nullptr
+        && clientShortcutsInhibitAllowed(focused)
+        && std::ranges::any_of(m_shortcutsInhibitors, [seat, focused](const auto& watch) {
              const wlr_keyboard_shortcuts_inhibitor_v1* inhibitor = watch->inhibitor;
              return inhibitor->active && inhibitor->seat == seat && inhibitor->surface == focused;
            });
+  }
+
+  bool Server::clientShortcutsInhibitAllowed(wlr_surface* surface) const {
+    View* view = surface != nullptr ? View::fromSurface(wlr_surface_get_root_surface(surface)) : nullptr;
+    return view == nullptr || view->allowsShortcutsInhibit();
+  }
+
+  void Server::refreshKeyboardShortcutsInhibitors() {
+    for (const auto& watch : m_shortcutsInhibitors) {
+      wlr_keyboard_shortcuts_inhibitor_v1* inhibitor = watch->inhibitor;
+      const bool active = watch->requestedActive && clientShortcutsInhibitAllowed(inhibitor->surface);
+      if (active && !inhibitor->active) {
+        wlr_keyboard_shortcuts_inhibitor_v1_activate(inhibitor);
+      } else if (!active && inhibitor->active) {
+        wlr_keyboard_shortcuts_inhibitor_v1_deactivate(inhibitor);
+      }
+    }
   }
 
   bool Server::toggleKeyboardShortcutsInhibit() {
@@ -247,13 +270,10 @@ namespace umbriel {
       if (inhibitor->seat != seat || inhibitor->surface != focused) {
         continue;
       }
-      clientInhibitor = true;
-      if (enable && !inhibitor->active) {
-        wlr_keyboard_shortcuts_inhibitor_v1_activate(inhibitor);
-      } else if (!enable && inhibitor->active) {
-        wlr_keyboard_shortcuts_inhibitor_v1_deactivate(inhibitor);
-      }
+      watch->requestedActive = enable;
+      clientInhibitor = clientShortcutsInhibitAllowed(focused);
     }
+    refreshKeyboardShortcutsInhibitors();
     if (enable && !clientInhibitor) {
       m_manualShortcutsInhibit.enable(focused);
     }
@@ -297,7 +317,10 @@ namespace umbriel {
     return nullptr;
   }
 
-  uint32_t Server::keyboardModifiers() const {
+  uint32_t Server::keyboardModifiers(bool includeCaptured) const {
+    if (!includeCaptured && m_inputCapture != nullptr && (m_inputCapture->capabilities() & 1U) != 0) {
+      return 0;
+    }
     uint32_t modifiers = 0;
     for (const auto& keyboard : m_keyboards) {
       if (keyboard == nullptr
