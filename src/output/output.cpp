@@ -774,7 +774,10 @@ namespace umbriel {
       m_workspaceGroup->abandonReveal();
     }
     const OutputRule* rule = findOutputRule(config(), identity());
-    updateSdrGamutTransform(rule, stageGeometry);
+    // Never force from the routine re-apply path: the key below carries the
+    // profile's mtime and the EDID fingerprint, so only real changes may
+    // re-read and rebuild. Force stays reserved for the mode-change path.
+    updateSdrGamutTransform(rule, false);
     const auto sdrTransfer = configuredSdrTransfer() == SdrTransfer::Srgb ? WLR_COLOR_TRANSFER_FUNCTION_SRGB
                                                                           : WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
     if (!wlr_scene_output_set_sdr_transfer_function(m_sceneOutput, sdrTransfer)) {

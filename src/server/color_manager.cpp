@@ -347,7 +347,11 @@ namespace umbriel {
       // (color-management-v1.xml: "This request can be used when the
       // compositor advertises wp_color_manager_v1.feature.icc_v2_v4") and is
       // advertised only because the creator is fully implemented below.
+      // Without lcms2 the parser rejects every profile, so advertising the
+      // feature would promise an accept path that cannot exist.
+#if UMBRIEL_HAS_LCMS2
       wp_color_manager_v1_send_supported_feature(resource, WP_COLOR_MANAGER_V1_FEATURE_ICC_V2_V4);
+#endif
       wp_color_manager_v1_send_supported_feature(resource, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
       wp_color_manager_v1_send_supported_feature(resource, WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES);
       wp_color_manager_v1_send_supported_feature(resource, WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES);
@@ -1175,13 +1179,6 @@ namespace umbriel {
       sendPrimaries(information, primaryCoordinates);
       if (description.data.tf_named != 0) {
         wp_image_description_info_v1_send_tf_named(information, description.data.tf_named);
-      } else if (description.tfPower > 0.0F) {
-        // At least one of tf_power and tf_named must be sent "as applicable"
-        // (wp_image_description_info_v1): a fitted power curve reports the
-        // exponent in the set_tf_power vocabulary (* 10000).
-        wp_image_description_info_v1_send_tf_power(
-            information, static_cast<uint32_t>(std::lround(description.tfPower * 10000.0F))
-        );
       }
       wp_image_description_info_v1_send_luminances(
           information, static_cast<uint32_t>(std::lround(description.luminances.min * 10000.0F)),

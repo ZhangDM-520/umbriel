@@ -331,9 +331,8 @@ namespace umbriel {
     }
 
     const std::vector<float> redDecode = evaluateCurve(redTrc, result.warnings);
-    std::vector<std::string> channelNotes;
-    if (!sameCurve(redDecode, evaluateCurve(greenTrc, channelNotes))
-        || !sameCurve(redDecode, evaluateCurve(blueTrc, channelNotes))) {
+    if (!sameCurve(redDecode, evaluateCurve(greenTrc, result.warnings))
+        || !sameCurve(redDecode, evaluateCurve(blueTrc, result.warnings))) {
       result.warnings.emplace_back("per-channel TRCs differ; using the red channel curve");
     }
 

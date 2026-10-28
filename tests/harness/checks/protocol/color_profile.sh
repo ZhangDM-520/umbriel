@@ -196,6 +196,27 @@ if ! fields_are "$PROFILE" srgb true true; then
 fi
 assert_mapped
 
+# --- re-apply must not re-read an unchanged profile (cache key contract) -----
+# The key carries the profile's mtime; content changed behind an unchanged
+# mtime may not be seen before a real key change. Corrupting the file and
+# restoring its mtime leaves the key identical, so a genuine re-apply (forced
+# here through an unrelated output-state change) may not touch the file and
+# the staged mapping must survive it.
+cp -p "$PROFILE" "$RUNTIME/profile.ref"
+printf 'not an ICC profile\n' > "$PROFILE"
+touch -r "$RUNTIME/profile.ref" "$PROFILE"
+write_config "color_profile = \"$PROFILE\"
+sdr_gamut = \"srgb\"
+sdr_white = 204"
+assert_mapped
+cp -p "$RUNTIME/profile.ref" "$PROFILE"
+write_config "color_profile = \"$PROFILE\"
+sdr_gamut = \"srgb\""
+if ! fields_are "$PROFILE" srgb true true; then
+  echo "restored profile did not resolve: $( "$UMBRIEL" color --json)"
+  exit 1
+fi
+
 # --- edid on a headless output: warned and inert ----------------------------
 write_config 'color_profile = "edid"
 sdr_gamut = "srgb"'
