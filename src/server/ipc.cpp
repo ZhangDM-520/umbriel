@@ -467,6 +467,21 @@ namespace umbriel {
     }
   }
 
+  void Ipc::notifyWindowCommitted() {
+    const bool settleWaiting = std::ranges::any_of(m_connections, [](const auto& connection) {
+      return connection->frameWait == FrameWait::Settled;
+    });
+    if (!settleWaiting) {
+      return;
+    }
+    // A window off screen draws nothing when it commits, so ask for the frame that checks the wait again.
+    for (const auto& output : m_server->outputs()) {
+      if (output->wlr()->enabled) {
+        wlr_output_schedule_frame(output->wlr());
+      }
+    }
+  }
+
   void Ipc::removeConnection(Connection* connection) {
     const auto entry = std::ranges::find_if(m_connections, [connection](const auto& candidate) {
       return candidate.get() == connection;

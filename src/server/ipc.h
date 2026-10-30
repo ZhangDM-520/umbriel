@@ -57,6 +57,9 @@ namespace umbriel {
     void notifyOutputsChanged();
     // End of an output frame: answers frame waits (settle, clock-advance) once every output has drawn a frame.
     void notifyOutputFrame(const Output& output);
+    // A window committed. A window off screen draws no frame when it commits its configure, so while a settle waits,
+    // this asks every output for the frame that checks it again.
+    void notifyWindowCommitted();
 
   private:
     enum class FrameWait : uint8_t { None, Drawn, Settled };

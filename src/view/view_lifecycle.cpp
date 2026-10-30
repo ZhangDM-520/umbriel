@@ -12,6 +12,7 @@
 #include "scene/effect_registry.h"
 #include "scene/ssd_frame.h"
 #include "scene/surface_blur.h"
+#include "server/ipc.h"
 #include "server/server.h"
 #include "view/view.h"
 extern "C" {
@@ -1114,6 +1115,9 @@ namespace umbriel {
       if (m_mapped) {
         m_server->scheduleIpcWindowsEvent();
       }
+    }
+    if (Ipc* ipc = m_server->ipc()) {
+      ipc->notifyWindowCommitted();
     }
   }
 
