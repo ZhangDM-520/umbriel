@@ -911,7 +911,7 @@ namespace umbriel {
     m_activeXcursorName = name;
   }
 
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
   std::string Cursor::clientCursorSourceForTest() const {
     if (!m_clientCursorKnown) {
       return "none";

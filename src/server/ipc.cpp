@@ -444,7 +444,7 @@ namespace umbriel {
                  return candidate->wlr()->enabled && name == candidate->wlr()->name;
                });
       });
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
       // A frozen animation never ends, so the wait would only time out.
       if (connection->frameWait == FrameWait::Settled
           && m_server->animationClockFrozen()
@@ -635,7 +635,7 @@ namespace umbriel {
       }
       return response;
     }
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     if (cmd == "settle") {
       beginFrameWait(connection, FrameWait::Settled, IpcCommands::settle(*m_server, {}).dump());
       return std::nullopt;

@@ -839,7 +839,7 @@ namespace umbriel {
           .gate = gate != nullptr ? *gate : ownGate,
           .scale = scale,
           .seconds = m_effects.configured() && output != nullptr ? output->effectSeconds() : 0.0F,
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
           .clockAdvancing = !m_server->animationClockFrozen(),
 #endif
           .output = output,

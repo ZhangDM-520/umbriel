@@ -271,7 +271,7 @@ namespace umbriel {
     fx_effect_shader* cursor = suspended ? nullptr : registry.preset(cursorName, EffectKind::Cursor);
     const EffectPreset* cursorPreset = cursor != nullptr ? registry.presetConfig(cursorName) : nullptr;
     bool advancing = true;
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     advancing = !m_server->animationClockFrozen();
 #endif
     wlr_scene_output_set_effect_time(m_sceneOutput, m_server->animationClockMsec());
@@ -1223,7 +1223,7 @@ namespace umbriel {
     return true;
   }
 
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
   void Output::setSyntheticPlaneCursorForTest(
       double x, double y, bool visible, std::uintptr_t image, int width, int height, int hotspotX, int hotspotY
   ) {
@@ -1259,7 +1259,7 @@ namespace umbriel {
         .hotspot_y = plane != nullptr ? plane->hotspot_y : 0,
         .image = plane != nullptr ? m_output->cursor_front_buffer : nullptr,
     };
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     if (m_syntheticPlaneCursor.has_value()) {
       now = *m_syntheticPlaneCursor;
     }
@@ -1836,7 +1836,7 @@ namespace umbriel {
     const EffectRegistry& effects = m_server->effects();
     bool stampEffectTime =
         effectFrame || (effectEligible() == 0 && (effects.persistentReferenced() || effects.active()));
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     stampEffectTime = stampEffectTime || m_server->animationClockFrozen();
 #endif
     if (stampEffectTime) {

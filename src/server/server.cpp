@@ -1290,7 +1290,7 @@ namespace umbriel {
       wl_event_source_timer_update(m_startupRulesTimer, kStartupRuleDurationMs);
     }
 
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     // Harness builds only: UMBRIEL_CONFIG_WATCH=0 turns the config file watcher off.
     const char* watchSetting = std::getenv("UMBRIEL_CONFIG_WATCH");
     const bool watchConfig = watchSetting == nullptr || std::strcmp(watchSetting, "0") != 0;
@@ -1982,7 +1982,7 @@ namespace umbriel {
   }
 
   double Server::animationFrameClockMsec(double monotonicMsec) const {
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     if (m_frozenAnimationClockMsec) {
       return static_cast<double>(*m_frozenAnimationClockMsec);
     }
@@ -1992,7 +1992,7 @@ namespace umbriel {
 #endif
   }
 
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
   void Server::freezeAnimationClock() {
     if (!m_frozenAnimationClockMsec) {
       m_frozenAnimationClockMsec = animationClockMsec();

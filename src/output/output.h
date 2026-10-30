@@ -165,7 +165,7 @@ namespace umbriel {
     // running commits the damage. Single-threaded, non-blocking, bounded per
     // output.
     bool paceCursorPlaneTransition();
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     // Harness-only: synthesize the plane sample a headless backend cannot produce.
     void setSyntheticPlaneCursorForTest(
         double x, double y, bool visible, std::uintptr_t image, int width, int height, int hotspotX, int hotspotY
@@ -261,7 +261,7 @@ namespace umbriel {
     bool m_softwareCursorLocked = false;
     bool m_animationRenderLocked = false;
     CursorPlaneState m_lastCursorPlane{};
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     std::optional<CursorPlaneState> m_syntheticPlaneCursor;
 #endif
     bool m_desktopEnabled = true;

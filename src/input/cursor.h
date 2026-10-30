@@ -241,7 +241,7 @@ namespace umbriel {
     // (overview drag). nullptr restores the client cursor.
     void overrideCursor(const char* name) { setCompositorCursor(name); }
     [[nodiscard]] bool compositorOwnsCursor() const { return m_compositorOwnsCursor; }
-#ifdef UMBRIEL_TEST_IPC
+#ifdef UMBRIEL_HARNESS
     struct RenderedCursorStateForTest {
       uint32_t textureWidth = 0;
       uint32_t textureHeight = 0;

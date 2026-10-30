@@ -146,9 +146,9 @@ fi
 BINARY=$(realpath "$BINARY")
 BINARY_DIR=$(dirname "$BINARY")
 
-# Checks drive harness-only IPC commands, which only a build with the test_ipc option has.
+# Checks drive harness-only IPC commands, which only a build with the harness option has.
 if ! "$BINARY" --help 2>/dev/null | grep -qw settle; then
-  echo "check: '$BINARY' lacks the harness IPC commands; configure it with -Dtest_ipc=enabled" >&2
+  echo "check: '$BINARY' lacks the harness IPC commands; configure it with -Dharness=enabled" >&2
   exit 1
 fi
 
