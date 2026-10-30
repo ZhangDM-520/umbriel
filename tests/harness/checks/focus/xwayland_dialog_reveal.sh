@@ -166,7 +166,7 @@ assert_pixel scrolled-parent 129 360 '48 96 144'
 "$UMBRIEL_POINTER_CLIENT" 1280 720 move 130 360 > /dev/null
 wait_active "$PARENT" 'hover refresh after explicit strip scroll'
 expect_x_focus "$PARENT" scrolled
-"$UMBRIEL" msg "window-focus:$child_id" > /dev/null
+"$UMBRIEL" msg window-focus "$child_id" > /dev/null
 wait_active "$CHILD" 'child focus after explicit scroll control'
 "$UMBRIEL" clock-advance 2000 > /dev/null
 "$UMBRIEL" settle > /dev/null
@@ -186,7 +186,7 @@ expect_x_focus "$PARENT" entered
 # Explicit clicks also override a child's pending reveal while the pointer
 # has remained inside the parent. No geometric entry is needed for a click.
 "$UMBRIEL_POINTER_CLIENT" 1280 720 move 128 360 > /dev/null
-"$UMBRIEL" msg "window-focus:$child_id" > /dev/null
+"$UMBRIEL" msg window-focus "$child_id" > /dev/null
 wait_active "$CHILD" 'explicit child focus'
 assert_pixel pending-click 128 360 '48 96 144'
 buttons_before=$(events "$CLIENT_LOG" "button window=$PARENT code=1 state=pressed")
@@ -197,7 +197,7 @@ await_events "$CLIENT_LOG" "button window=$PARENT code=1 state=pressed" "$((butt
 
 # Withdrawing the focused child restores a usable parent and retires its
 # pending reveal state rather than retaining a stale dialog focus target.
-"$UMBRIEL" msg "window-focus:$child_id" > /dev/null
+"$UMBRIEL" msg window-focus "$child_id" > /dev/null
 wait_active "$CHILD" 'child focus before withdrawal'
 send_client unmap-dialog
 for _ in $(seq 100); do

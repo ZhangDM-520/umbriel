@@ -173,7 +173,7 @@ for raises in true false; do
   pointer_step parent-return
   wait_focus "$PARENT" "hover_raises=$raises geometric entry into parent"
   child_id=$(window "$CHILD" | jq -r .id)
-  "$UMBRIEL" msg "window-focus:$child_id" > /dev/null
+  "$UMBRIEL" msg window-focus "$child_id" > /dev/null
   wait_focus "$CHILD" "hover_raises=$raises child focus before parent click"
   expect_x_focus "$CHILD" "before_click_$raises"
   buttons_before=$(events "$CLIENT_LOG" "button window=$PARENT code=1 state=pressed")

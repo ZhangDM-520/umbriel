@@ -16,12 +16,12 @@ namespace umbriel {
 
     constexpr Logger kLog("xwayland");
 
-    // Client-placed context menus, tooltips, dropdowns, and drag icons can omit override-redirect. EWMH MENU describes
-    // a persistent torn-off menu, so it stays managed unless it explicitly requests override-redirect.
+    // Client-placed context menus, notifications, tooltips, dropdowns, and drag icons can omit override-redirect.
+    // EWMH MENU describes a persistent torn-off menu, so it stays managed unless it requests override-redirect.
     constexpr std::array kPopupWindowTypes{
         WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DROPDOWN_MENU, WLR_XWAYLAND_NET_WM_WINDOW_TYPE_POPUP_MENU,
         WLR_XWAYLAND_NET_WM_WINDOW_TYPE_TOOLTIP,       WLR_XWAYLAND_NET_WM_WINDOW_TYPE_COMBO,
-        WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DND,
+        WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DND,           WLR_XWAYLAND_NET_WM_WINDOW_TYPE_NOTIFICATION,
     };
 
     bool isPopup(const wlr_xwayland_surface* xsurface) {
@@ -145,6 +145,9 @@ namespace umbriel {
     }
     const bool popup = isPopup(m_xsurface);
     if (popup == (m_unmanaged != nullptr)) {
+      if (m_unmanaged != nullptr) {
+        m_unmanaged->refreshFocusPolicy();
+      }
       return;
     }
     if (m_view != nullptr && m_xsurface->override_redirect) {
@@ -168,6 +171,9 @@ namespace umbriel {
       // Unmanaged geometry belongs to the client, including override-redirect configures that bypass request_configure.
       m_clientGeometry = {m_xsurface->x, m_xsurface->y, m_xsurface->width, m_xsurface->height};
     }
+    if (m_view != nullptr) {
+      m_captureBlockedBeforePopup = m_view->captureBlocked();
+    }
     kLog.debug("reclassifying X11 window={} as {}", m_xsurface->window_id, popup ? "popup" : "managed");
     destroyWrapper();
     if (popup) {
@@ -182,12 +188,18 @@ namespace umbriel {
 
   void XwaylandWindow::createWrapper() {
     if (isPopup(m_xsurface)) {
-      m_unmanaged = std::make_unique<XwaylandUnmanaged>(m_server, m_xsurface);
+      m_unmanaged = std::make_unique<XwaylandUnmanaged>(m_server, m_xsurface, m_captureBlockedBeforePopup);
     } else {
       m_view = &m_server.adoptView(std::make_unique<View>(m_server, m_xsurface));
       if (m_xsurface->surface->mapped && !m_view->mapped()) {
         m_view->handleMap();
       }
+    }
+  }
+
+  void XwaylandWindow::refreshCaptureProtection() {
+    if (m_unmanaged != nullptr) {
+      m_unmanaged->refreshCaptureProtection();
     }
   }
 
@@ -205,6 +217,12 @@ namespace umbriel {
       return m_view->xwaylandScale();
     }
     return m_unmanaged != nullptr ? m_unmanaged->scale() : 1.0;
+  }
+
+  void XwaylandWindow::handleXwmSync(uint64_t serial) {
+    if (m_unmanaged != nullptr) {
+      m_unmanaged->handleXwmSync(serial);
+    }
   }
 
   void XwaylandWindow::destroyWrapper() {

@@ -189,8 +189,8 @@ Logical output actions can remove the laptop panel from the desktop instead of m
 
 ```toml
 [events]
-lid_close = "umbriel msg output-disable:eDP-1"
-lid_open = "umbriel msg output-enable:eDP-1"
+lid_close = "umbriel msg output-disable eDP-1"
+lid_open = "umbriel msg output-enable eDP-1"
 ```
 
 ## Screencast
@@ -226,8 +226,8 @@ name = "terminal"
 name = "music"
 
 [keybinds]
-"Mod+Space" = "scratchpad-toggle:terminal"
-"Mod+M" = "scratchpad-toggle:music"
+"Mod+Space" = "scratchpad-toggle terminal"
+"Mod+M" = "scratchpad-toggle music"
 ```
 
 Defining a named scratchpad removes the implicit `default`. See [Scratchpads](scratchpad.md) for window assignment and behavior.

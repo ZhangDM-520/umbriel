@@ -14,8 +14,9 @@ namespace umbriel {
   class XwaylandUnmanaged;
 
   // One X11 window for its whole lifetime. While it has a wl_surface, an override-redirect window or one typed as a
-  // context menu, tooltip, dropdown, or drag icon is an XwaylandUnmanaged, and any other window is a View; a window
-  // whose type or override-redirect flag changes swaps wrappers without changing the Wayland surface's mapped state.
+  // context menu, notification, tooltip, dropdown, or drag icon is an XwaylandUnmanaged, and any other window is a
+  // View; a window whose type or override-redirect flag changes swaps wrappers without changing the Wayland surface's
+  // mapped state.
   class XwaylandWindow {
   public:
     XwaylandWindow(Server& server, Xwayland& owner, wlr_xwayland_surface* xsurface);
@@ -27,6 +28,9 @@ namespace umbriel {
 
     // The X screen moved relative to the layout: re-place the wrapper's window.
     void syncGeometry();
+    // An event-stream barrier completed for one map of this window.
+    void handleXwmSync(uint64_t serial);
+    void refreshCaptureProtection();
     [[nodiscard]] wlr_xwayland_surface* xsurface() const { return m_xsurface; }
     // X pixels per layout unit in the window's surface.
     [[nodiscard]] double scale() const;
@@ -58,6 +62,7 @@ namespace umbriel {
       uint16_t height;
     } m_clientGeometry;
     View* m_view = nullptr;
+    bool m_captureBlockedBeforePopup = false;
     std::unique_ptr<XwaylandUnmanaged> m_unmanaged;
     wl_listener m_associate{};
     wl_listener m_dissociate{};

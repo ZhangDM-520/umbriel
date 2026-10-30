@@ -93,13 +93,13 @@ fi
 # A live SDR white selection targets the preferred or named output and lasts until a reload changes output state.
 sdr_white() { "$UMBRIEL" color --json | jq '.outputs[0].sdr_white'; }
 sdr_white_is() { "$UMBRIEL" color --json | jq -e --argjson nits "$1" '.outputs[0].sdr_white == $nits' > /dev/null; }
-"$UMBRIEL" msg output-sdr-white:150 > /dev/null
+"$UMBRIEL" msg output-sdr-white 150 > /dev/null
 if ! sdr_white_is 150; then
   echo "preferred-output SDR white was not selected: $(sdr_white)"
   exit 1
 fi
-"$UMBRIEL" msg output-sdr-white:120/HEADLESS-1 > /dev/null
-if "$UMBRIEL" msg output-sdr-white:300/missing-output > /dev/null 2>&1 || ! sdr_white_is 120; then
+"$UMBRIEL" msg output-sdr-white 120 --output HEADLESS-1 > /dev/null
+if "$UMBRIEL" msg output-sdr-white 300 --output missing-output > /dev/null 2>&1 || ! sdr_white_is 120; then
   echo "named-output SDR white was not selected exactly once: $(sdr_white)"
   exit 1
 fi
@@ -173,7 +173,7 @@ grim "$normal_shot"
 # The sample point assumes the settled half-scale card, so wait out the overview and card motion.
 "$UMBRIEL" settle
 wine_scrgb_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "wine-scrgb") | .id')
-"$UMBRIEL" msg "window-close:$wine_scrgb_id" > /dev/null
+"$UMBRIEL" msg window-close "$wine_scrgb_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^redrawn$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -199,7 +199,7 @@ done
 "$UMBRIEL" msg overview-close > /dev/null
 
 wine_scrgb_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "wine-scrgb") | .id')
-"$UMBRIEL" msg "window-close:$wine_scrgb_id" > /dev/null
+"$UMBRIEL" msg window-close "$wine_scrgb_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^unmapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -256,7 +256,7 @@ fi
 
 wine_scrgb_auto_child_id=$("$UMBRIEL" windows --json \
   | jq -r '.[] | select(.title == "wine-scrgb-auto-child") | .id')
-"$UMBRIEL" msg "window-close:$wine_scrgb_auto_child_id" > /dev/null
+"$UMBRIEL" msg window-close "$wine_scrgb_auto_child_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^color-child-mapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -271,7 +271,7 @@ if ! grep -q '^color-child-mapped$' "$CLIENT_LOG" \
   exit 1
 fi
 
-"$UMBRIEL" msg "window-close:$wine_scrgb_auto_child_id" > /dev/null
+"$UMBRIEL" msg window-close "$wine_scrgb_auto_child_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^color-child-hdr$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -302,7 +302,7 @@ if ! jq -e '
   exit 1
 fi
 
-"$UMBRIEL" msg "window-close:$wine_scrgb_auto_child_id" > /dev/null
+"$UMBRIEL" msg window-close "$wine_scrgb_auto_child_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^color-child-unmapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -328,7 +328,7 @@ if ! grep -q '^color-child-unmapped$' "$CLIENT_LOG" \
   exit 1
 fi
 
-"$UMBRIEL" msg "window-close:$wine_scrgb_auto_child_id" > /dev/null
+"$UMBRIEL" msg window-close "$wine_scrgb_auto_child_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^unmapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -388,7 +388,7 @@ if ((COLOR_MANAGER_VERSION >= 3)); then
   fi
 
   wine_bt2100_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "wine-bt2100") | .id')
-  "$UMBRIEL" msg "window-close:$wine_bt2100_id" > /dev/null
+  "$UMBRIEL" msg window-close "$wine_bt2100_id" > /dev/null
   for _ in $(seq 40); do
     grep -q '^unmapped$' "$CLIENT_LOG" && break
     sleep 0.1
@@ -446,7 +446,7 @@ if ! jq -e '
 fi
 
 auto_hdr_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "auto-hdr") | .id')
-"$UMBRIEL" msg "window-close:$auto_hdr_id" > /dev/null
+"$UMBRIEL" msg window-close "$auto_hdr_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^unmapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -518,7 +518,7 @@ if ! jq -e '
 fi
 
 fullscreen_hdr_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "fullscreen-hdr") | .id')
-"$UMBRIEL" msg "window-close:$fullscreen_hdr_id" > /dev/null
+"$UMBRIEL" msg window-close "$fullscreen_hdr_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^unmapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -556,7 +556,7 @@ for _ in $(seq 60); do
   sleep 0.1
 done
 hdr_rule_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "hdr-rule-on") | .id')
-"$UMBRIEL" msg "window-focus:$hdr_rule_id" > /dev/null
+"$UMBRIEL" msg window-focus "$hdr_rule_id" > /dev/null
 for _ in $(seq 40); do
   color=$("$UMBRIEL" color --json)
   jq -e '
@@ -575,7 +575,7 @@ if ! jq -e '
   exit 1
 fi
 
-"$UMBRIEL" msg "window-close:$hdr_rule_id" > /dev/null
+"$UMBRIEL" msg window-close "$hdr_rule_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^unmapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -614,7 +614,7 @@ for _ in $(seq 60); do
   sleep 0.1
 done
 hdr_rule_id=$("$UMBRIEL" windows --json | jq -r '.[] | select(.title == "hdr-rule-off") | .id')
-"$UMBRIEL" msg "window-focus:$hdr_rule_id" > /dev/null
+"$UMBRIEL" msg window-focus "$hdr_rule_id" > /dev/null
 for _ in $(seq 40); do
   color=$("$UMBRIEL" color --json)
   jq -e '
@@ -633,7 +633,7 @@ if ! jq -e '
   exit 1
 fi
 
-"$UMBRIEL" msg "window-close:$hdr_rule_id" > /dev/null
+"$UMBRIEL" msg window-close "$hdr_rule_id" > /dev/null
 for _ in $(seq 40); do
   grep -q '^unmapped$' "$CLIENT_LOG" && break
   sleep 0.1

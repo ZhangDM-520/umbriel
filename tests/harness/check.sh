@@ -261,7 +261,7 @@ kill_check_group() {
 }
 
 # Kills the instance and everything it forked. The compositor runs in its own
-# session, so processes it spawned itself (autostarts, `msg spawn:`) sit in the
+# session, so processes it spawned itself (autostarts, `msg spawn`) sit in the
 # instance's process group rather than the check's, and reaping that group is
 # the only way they do not outlive the run.
 kill_instance() {
@@ -533,7 +533,7 @@ start_instance() {
   fi
 
   # setsid puts the compositor in a session of its own, so anything it forks
-  # (an autostart, a keybind `spawn:`) is reachable as one process group at
+  # (an autostart, a keybind `spawn`) is reachable as one process group at
   # teardown instead of joining the harness's own group where it cannot be
   # signalled. The wrapper reports the group id it leads and then execs the
   # compositor in place, so SERVER_PID stays the compositor.

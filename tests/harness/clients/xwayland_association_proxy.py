@@ -5,6 +5,10 @@ Xwayland's XWM and Wayland sockets are independent. Delaying only an association
 ClientMessage makes its first buffer commit arrive before the X11 association.
 The check releases that event after observing the real buffer import, so this
 does not depend on a timer winning a scheduler race.
+
+An optional position hold leaves a real ConfigureNotify queued while association
+and Wayland buffers proceed. Presentation barriers for that window stay behind
+its geometry until the check releases the hold.
 """
 
 import os
@@ -59,6 +63,7 @@ def main():
         association_atoms = set()
         armed = set()
         held = {}
+        positions = {}
         trace(f"ready proxy={os.getpid()} xwayland={child_pid}")
 
         try:
@@ -84,6 +89,22 @@ def main():
                                 struct.pack_into(endian + "H", packet, 2, latest_sequence)
                                 compositor.sendall(packet)
                             trace(f"released window={window} events={len(packets)}")
+                        elif command == "hold-position":
+                            positions[window] = []
+                            trace(f"armed-position window={window}")
+                        elif command in ("release-position", "release-oldest-position"):
+                            packets = positions[window]
+                            if command == "release-oldest-position":
+                                end = next(i for i, packet in enumerate(packets) if packet[0] & 0x7F == 33) + 1
+                                packets, positions[window] = packets[:end], packets[end:]
+                            else:
+                                positions.pop(window)
+                            # Replies may have passed these held events. Keep
+                            # their geometry authoritative before any fence.
+                            for packet in sorted(packets, key=lambda value: value[0] & 0x7F != 22):
+                                struct.pack_into(endian + "H", packet, 2, latest_sequence)
+                                compositor.sendall(packet)
+                            trace(f"released-{command.removeprefix('release-')} window={window} events={len(packets)}")
                         else:
                             raise ValueError(f"unknown control command: {command}")
 
@@ -153,6 +174,20 @@ def main():
                             if window in armed and atom in association_atoms:
                                 held.setdefault(window, []).append(packet)
                                 trace(f"held window={window} serial={serial_high << 32 | serial_low}")
+                                continue
+                            # Shape/RandR wakeups carry no subject window. A
+                            # presentation fence does, so preserve its ordering
+                            # after any position held for that subject.
+                            if packet[1] == 32 and atom == 0 and serial_low in positions:
+                                positions[serial_low].append(packet)
+                                trace(f"held-position-fence window={serial_low}")
+                                continue
+                        if kind == 22:  # ConfigureNotify
+                            window = struct.unpack_from(endian + "I", packet, 8)[0]
+                            x, y = struct.unpack_from(endian + "hh", packet, 16)
+                            if window in positions and (x, y) == (930, 550):
+                                positions[window].append(packet)
+                                trace(f"held-position window={window} x={x} y={y}")
                                 continue
                         compositor.sendall(packet)
         except (BrokenPipeError, ConnectionResetError):

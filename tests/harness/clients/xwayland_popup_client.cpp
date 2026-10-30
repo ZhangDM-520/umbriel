@@ -25,6 +25,7 @@ namespace {
     xcb_atom_t menu = XCB_ATOM_NONE;
     xcb_atom_t popup = XCB_ATOM_NONE;
     xcb_atom_t dropdown = XCB_ATOM_NONE;
+    xcb_atom_t notification = XCB_ATOM_NONE;
     xcb_atom_t clients = XCB_ATOM_NONE;
     xcb_atom_t stacking = XCB_ATOM_NONE;
     xcb_atom_t active = XCB_ATOM_NONE;
@@ -160,6 +161,7 @@ namespace {
           : atom == state.menu                    ? "menu"
           : atom == state.popup                   ? "popup"
           : atom == state.dropdown                ? "dropdown"
+          : atom == state.notification            ? "notification"
                                                   : "none";
       bool maximizedHorz = false, maximizedVert = false, fullscreen = false;
       if (netState->type == XCB_ATOM_ATOM && netState->format == 32) {
@@ -188,6 +190,8 @@ namespace {
     std::free(netState);
   }
 
+  void event(State& state, const xcb_generic_event_t& generic);
+
   void command(State& state, std::string_view line) {
     bool valid = true;
     if (line == "map") {
@@ -200,6 +204,7 @@ namespace {
           : name == "menu"                     ? state.menu
           : name == "popup"                    ? state.popup
           : name == "dropdown"                 ? state.dropdown
+          : name == "notification"             ? state.notification
                                                : xcb_atom_t{XCB_ATOM_NONE};
       if (type == XCB_ATOM_NONE) {
         valid = false;
@@ -211,6 +216,21 @@ namespace {
             )
         );
       }
+    } else if (line == "map-move" || line == "move-map") {
+      // Keep map and placement in one flush, without a reply that serializes the two X11 requests.
+      constexpr std::array<uint32_t, 4> geometry{930, 550, 300, 160};
+      if (line == "map-move") {
+        xcb_map_window(state.connection, state.window);
+      }
+      xcb_configure_window(
+          state.connection, state.window,
+          XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+          geometry.data()
+      );
+      if (line == "move-map") {
+        xcb_map_window(state.connection, state.window);
+      }
+      xcb_flush(state.connection);
     } else if (line == "override-direct") {
       // A client can place its popup in the same sequence that changes OR.
       // No intermediate ConfigureNotify exposes the old maximized geometry.
@@ -273,6 +293,38 @@ namespace {
             )
         );
       }
+    } else if (line.starts_with("class ") && line.size() > 6) {
+      const std::string name(line.substr(6));
+      const std::string wmClass = name + '\0' + name + '\0';
+      check(
+          state,
+          xcb_change_property_checked(
+              state.connection, XCB_PROP_MODE_REPLACE, state.window, XCB_ATOM_WM_CLASS, XCB_ATOM_STRING, 8,
+              static_cast<uint32_t>(wmClass.size()), wmClass.data()
+          )
+      );
+    } else if (line == "input true" || line == "input false") {
+      const std::array<uint32_t, 9> hints{1, line == "input true" ? 1U : 0U};
+      check(
+          state,
+          xcb_change_property_checked(
+              state.connection, XCB_PROP_MODE_REPLACE, state.window, XCB_ATOM_WM_HINTS, XCB_ATOM_WM_HINTS, 32,
+              hints.size(), hints.data()
+          )
+      );
+    } else if (line.starts_with("sync ")) {
+      auto* reply = xcb_get_input_focus_reply(state.connection, xcb_get_input_focus(state.connection), nullptr);
+      if (reply == nullptr) {
+        fail(state, "failed to synchronize X11 events");
+        return;
+      }
+      std::free(reply);
+      while (xcb_generic_event_t* pending = xcb_poll_for_event(state.connection)) {
+        event(state, *pending);
+        std::free(pending);
+      }
+      std::println("synced {}", line.substr(5));
+      return;
     } else if (line.starts_with("title ")) {
       setTitle(state, line.substr(6));
     } else if (line == "focus") {
@@ -330,6 +382,10 @@ namespace {
       std::println("unmapped");
     } else if (type == XCB_CONFIGURE_NOTIFY) {
       const auto& configure = reinterpret_cast<const xcb_configure_notify_event_t&>(generic);
+      std::println(
+          "configure x={} y={} w={} h={} override={}", configure.x, configure.y, configure.width, configure.height,
+          configure.override_redirect != 0
+      );
       if (state.width != configure.width || state.height != configure.height) {
         state.width = configure.width;
         state.height = configure.height;
@@ -365,6 +421,7 @@ int main(int argc, char** argv) {
   state.menu = internAtom(state, "_NET_WM_WINDOW_TYPE_MENU");
   state.popup = internAtom(state, "_NET_WM_WINDOW_TYPE_POPUP_MENU");
   state.dropdown = internAtom(state, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU");
+  state.notification = internAtom(state, "_NET_WM_WINDOW_TYPE_NOTIFICATION");
   state.clients = internAtom(state, "_NET_CLIENT_LIST");
   state.stacking = internAtom(state, "_NET_CLIENT_LIST_STACKING");
   state.active = internAtom(state, "_NET_ACTIVE_WINDOW");

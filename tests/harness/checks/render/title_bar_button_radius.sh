@@ -129,7 +129,7 @@ EOF
 "$UMBRIEL" settle >/dev/null
 "$UMBRIEL" clock-freeze >/dev/null
 id=$(title_bar_window ssd-button-radius | jq -r '.id')
-"$UMBRIEL" msg "window-close:$id" >/dev/null
+"$UMBRIEL" msg window-close "$id" >/dev/null
 title_bar_wait_absent ssd-button-radius
 grim -o HEADLESS-1 "$image"
 snapshot=$("$UMBRIEL_PIXEL_PROBE" "$image" count 'g > 0.8 && r < 0.2 && b < 0.2')

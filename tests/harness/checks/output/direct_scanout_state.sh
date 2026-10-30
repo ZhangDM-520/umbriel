@@ -139,12 +139,12 @@ fi
 
 # The power-off commit has no scene buffer. Power-on builds a configured scene frame, and history must survive both.
 before_power=$(scanout)
-"$UMBRIEL" msg dpms-off:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg dpms-off HEADLESS-1 > /dev/null
 if [[ $(scanout) != null ]]; then
   echo "a powered-off output still reports a live scanout state"
   exit 1
 fi
-"$UMBRIEL" msg dpms-on:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg dpms-on HEADLESS-1 > /dev/null
 after_power=$(scanout)
 if ! jq -en --argjson before "$before_power" --argjson after "$after_power" '
     ($after.active | not) and $after.reason == "disabled" and $after.commits > $before.commits

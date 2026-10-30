@@ -18,6 +18,12 @@ static const struct wlr_addon_interface buffer_addon_impl = {
     .destroy = handle_buffer_destroy,
 };
 
+static bool framebuffer_uses_texture(const struct fx_framebuffer* buffer) {
+  // Opaque 10-bit EGLImages expose RGB10 textures, which GLES cannot attach
+  // as color targets. Their renderbuffer views remain renderable.
+  return buffer->owned && buffer->drm_format != DRM_FORMAT_XRGB2101010 && buffer->drm_format != DRM_FORMAT_XBGR2101010;
+}
+
 GLuint fx_framebuffer_get_texture(struct fx_framebuffer* buffer) {
   struct fx_renderer* renderer = buffer->renderer;
   if (!renderer->procs.glEGLImageTargetTexture2DOES) {
@@ -31,9 +37,9 @@ GLuint fx_framebuffer_get_texture(struct fx_framebuffer* buffer) {
       return 0;
     }
   }
-  // Owned buffers render into this texture itself. External textures observe
-  // producer updates on binding; other client buffers still need reimporting.
-  if (initial || (!buffer->external_only && !buffer->owned)) {
+  // Renderbuffer-backed views need reimporting to observe producer updates.
+  // External textures observe updates on binding.
+  if (initial || (!buffer->external_only && !framebuffer_uses_texture(buffer))) {
     const GLenum target = buffer->external_only ? GL_TEXTURE_EXTERNAL_OES : GL_TEXTURE_2D;
     glBindTexture(target, buffer->tex);
     glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -60,7 +66,8 @@ GLuint fx_framebuffer_get_fbo(struct fx_framebuffer* buffer) {
 
   push_fx_debug(buffer->renderer);
 
-  if (buffer->owned) {
+  const bool texture_attachment = framebuffer_uses_texture(buffer);
+  if (texture_attachment) {
     // Use one GL object for rendering and sampling so the driver tracks their
     // ordering without aliasing separate EGLImage renderbuffer/texture siblings.
     GLint previous_texture;
@@ -80,7 +87,7 @@ GLuint fx_framebuffer_get_fbo(struct fx_framebuffer* buffer) {
 
   glGenFramebuffers(1, &buffer->fbo);
   glBindFramebuffer(GL_FRAMEBUFFER, buffer->fbo);
-  if (buffer->owned) {
+  if (texture_attachment) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer->tex, 0);
   } else {
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, buffer->rbo);
@@ -197,7 +204,7 @@ void fx_framebuffer_get_or_create_custom(
   glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo);
   glDisable(GL_SCISSOR_TEST);
-  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+  glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
   glClear(GL_COLOR_BUFFER_BIT);
   glClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
   if (scissor_enabled) {

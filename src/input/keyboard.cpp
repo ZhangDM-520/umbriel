@@ -516,7 +516,7 @@ namespace umbriel {
     // A modifier-only action runs after its release reaches the focused
     // client, so opening a surface cannot strand the old focus with Mod held.
     if (modifierTap.has_value()) {
-      m_server->executeKeybindAction(*modifierTap);
+      m_server->executeAction(*modifierTap);
     }
   }
 
@@ -581,7 +581,7 @@ namespace umbriel {
       return 0;
     }
     self->m_server->notifyIdleActivity();
-    self->m_server->executeKeybindAction(self->m_repeatBind);
+    self->m_server->executeAction(self->m_repeatBind);
     wl_event_source_timer_update(self->m_repeatTimer, self->m_repeatIntervalMs);
     return 0;
   }

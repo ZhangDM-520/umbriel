@@ -72,6 +72,7 @@ namespace umbriel {
     // True for an explicit configured or client-created name. Numeric labels
     // generated for anonymous static or dynamic positions leave this false.
     [[nodiscard]] bool named() const { return m_named; }
+    [[nodiscard]] bool transferred() const { return m_transferred; }
     [[nodiscard]] size_t index() const { return m_index; }
     [[nodiscard]] bool active() const { return m_active; }
     [[nodiscard]] const std::shared_ptr<const DisplacedWorkspace>& displacedWorkspace() const {
@@ -130,8 +131,14 @@ namespace umbriel {
     void syncFloatingStack(View* view);
     void restackFloatingViews();
     void raiseFloatingLayer();
-    void addView(View* view, bool attachToLayout = true, LayoutAttachOrigin origin = LayoutAttachOrigin::ExistingView);
+    void addView(
+        View* view, bool attachToLayout = true, LayoutAttachOrigin origin = LayoutAttachOrigin::ExistingView,
+        bool reconcile = true
+    );
     View* removeView(View* view, bool reconcile = true);
+    // Take over the pinned members of another workspace on this output without reconciling the group, so it is safe
+    // during activation and inventory reconciliation.
+    void adoptPinnedViews(Workspace& from);
     void layoutAttach(
         View* view, std::optional<double> initialExtent = std::nullopt,
         std::optional<int> initialExtentPx = std::nullopt, LayoutAttachOrigin origin = LayoutAttachOrigin::ExistingView
@@ -251,6 +258,9 @@ namespace umbriel {
     // Floating frames from back to front, matching their workspace stacking order.
     [[nodiscard]] const std::vector<View*>& floatingStack() const noexcept { return m_floatingStack; }
     [[nodiscard]] bool hasViews() const { return !m_views.empty(); }
+    // Whether the workspace holds a window of its own. Pinned windows belong to the output and only ride along with
+    // its active workspace, so they never make a workspace occupied.
+    [[nodiscard]] bool occupied() const;
     // Minimize every floating window here that can be, remembering the focus. When none is left to hide, restore
     // every minimized window here, however it was minimized, and return focus to where it was.
     void toggleShowDesktop();
@@ -275,6 +285,7 @@ namespace umbriel {
     void resumeScrollHoverFocus() { m_scrollHoverFocusDeferred = false; }
 
   private:
+    void transferTo(WorkspaceGroup& group);
     void syncFloatingLayer();
     friend class WorkspaceGroup;
 
@@ -314,6 +325,7 @@ namespace umbriel {
     std::string m_name;
     size_t m_index = 0;
     bool m_named = false;
+    bool m_transferred = false;
     bool m_active = false;
     std::shared_ptr<const DisplacedWorkspace> m_displacedWorkspace;
     std::shared_ptr<WorkspaceLaunchAnchor> m_launchAnchor = std::make_shared<WorkspaceLaunchAnchor>();
@@ -409,12 +421,13 @@ namespace umbriel {
     // Dynamic groups reuse their highest empty anonymous workspace before appending. Static groups reject protocol
     // create requests because their configured inventory is exact.
     Workspace* createWorkspace(const char* name);
-    // Acquire a destination for moving every window from another workspace. Static groups reuse their highest empty
-    // configured workspace without changing its identity; dynamic groups use the ordinary create behavior.
-    Workspace* transferDestination();
+    // Move the workspace object after the destination's active member, retaining its identity, layout, and views.
+    bool transferTo(Workspace& workspace, WorkspaceGroup& destination, std::string* error);
     // Acquire a temporary workspace for one absent home, including on a fixed output. Explicit names survive, while
     // anonymous workspaces use their new numeric position. Original identities keep matching names separate.
     Workspace* displacedDestination(std::shared_ptr<const DisplacedWorkspace> origin);
+    // Recreate runtime inventory at its saved position when the output receiving a transfer returns.
+    Workspace* restoreTransferredWorkspace(const DisplacedWorkspace& origin);
     // Insert an empty numbered workspace into a dynamic group and renumber the following workspaces. Static configured
     // groups cannot be extended this way and return null.
     Workspace* insertDynamicWorkspace(size_t index);
@@ -484,6 +497,7 @@ namespace umbriel {
     size_t m_omittedConfiguredNames = 0;
     WorkspaceAxis m_workspaceAxis = WorkspaceAxis::Vertical;
     uint32_t m_nextHandleSerial = 1;
+    std::vector<std::string> m_transferredNames;
     std::vector<std::unique_ptr<Workspace>> m_workspaces;
     AnimatedValue m_slideAnim;
     Slide m_slide;

@@ -116,6 +116,10 @@ namespace umbriel {
       std::optional<MasterPosition> position;
       bool operator==(const Master&) const = default;
     } master;
+    struct Stacking {
+      std::optional<bool> dropZones;
+      bool operator==(const Stacking&) const = default;
+    } stacking;
     struct Tabs {
       std::optional<ColumnDisplay> defaultDisplay;
       std::optional<NewTabPosition> newTabPosition;
@@ -175,6 +179,10 @@ namespace umbriel {
       MasterPosition position = MasterPosition::Left;
       bool operator==(const Master&) const = default;
     } master;
+    struct Stacking {
+      bool dropZones = true;
+      bool operator==(const Stacking&) const = default;
+    } stacking;
     struct Tabs {
       ColumnDisplay defaultDisplay = ColumnDisplay::Normal;
       NewTabPosition newTabPosition = NewTabPosition::End;
@@ -469,6 +477,7 @@ namespace umbriel {
     // Keep a hidden window unsuspended and pace its frame callbacks at its output's refresh rate, for clients whose
     // non-rendering work stalls without them.
     std::optional<bool> backgroundRender;
+    std::optional<bool> blockCapture;
     std::optional<VrrMode> vrr;
     // Overrides the client's tearing-control hint. Omitted follows the hint,
     // true forces async preference, and false vetoes it.
@@ -536,6 +545,7 @@ namespace umbriel {
           && confinePointer == other.confinePointer
           && allowShortcutsInhibit == other.allowShortcutsInhibit
           && backgroundRender == other.backgroundRender
+          && blockCapture == other.blockCapture
           && vrr == other.vrr
           && allowTearing == other.allowTearing
           && hdr == other.hdr
@@ -584,6 +594,7 @@ namespace umbriel {
     std::optional<bool> confinePointer;
     std::optional<bool> allowShortcutsInhibit;
     std::optional<bool> backgroundRender;
+    std::optional<bool> blockCapture;
     std::optional<VrrMode> vrr;
     std::optional<bool> allowTearing;
     std::optional<HdrMode> hdr;
@@ -1019,6 +1030,10 @@ namespace umbriel {
         MasterPosition position = MasterPosition::Left;
         bool operator==(const Master&) const = default;
       } master;
+      struct Stacking {
+        bool dropZones = true;
+        bool operator==(const Stacking&) const = default;
+      } stacking;
       struct Tabs {
         ColumnDisplay defaultDisplay = ColumnDisplay::Normal;
         NewTabPosition newTabPosition = NewTabPosition::End;
@@ -1105,8 +1120,6 @@ namespace umbriel {
       // Let a client start an interactive move from its own drag area
       // (xdg_toplevel.move), such as a CSD title bar or Chromium tab strip.
       bool clientWindowDrag = true;
-      // Preview and apply half or quarter placement while dragging to output edges.
-      bool windowSnapping = true;
       // Retarget an interactive window drag with the free mouse button: float
       // it, pin it, or leave the drag alone.
       WindowDragToggle windowDragToggle = WindowDragToggle::None;

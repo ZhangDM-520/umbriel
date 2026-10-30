@@ -122,7 +122,7 @@ namespace umbriel {
     }
   }
 
-  bool Server::executeKeybindAction(const Keybind& bind, std::string* error, bool* cooldownBlocked) {
+  bool Server::executeAction(const Keybind& bind, std::string* error, bool* cooldownBlocked) {
     if (error != nullptr) {
       error->clear();
     }
@@ -287,7 +287,7 @@ namespace umbriel {
 
     for (const Keybind& bind : config().keybinds) {
       if (bind.submap != currentSubmap) {
-        // Allow submap:reset from the default context to always match, so users
+        // Allow `submap reset` from the default context to always match, so users
         // can define a global emergency exit.
         if (!m_activeSubmaps.empty() && bind.submap.empty() && isSubmapResetBind(bind)) {
           // Fall through to match below.
@@ -343,7 +343,7 @@ namespace umbriel {
     }
     const Keybind matched = *bind;
     bool cooldownBlocked = false;
-    const bool handled = executeKeybindAction(matched, nullptr, &cooldownBlocked);
+    const bool handled = executeAction(matched, nullptr, &cooldownBlocked);
     return handled || cooldownBlocked ? std::optional<Keybind>{matched} : std::nullopt;
   }
 
@@ -365,7 +365,7 @@ namespace umbriel {
       if (effective != expected) {
         continue;
       }
-      return executeKeybindAction(bind);
+      return executeAction(bind);
     }
 
     return false;
@@ -394,7 +394,7 @@ namespace umbriel {
         continue;
       }
       bool cooldownBlocked = false;
-      const bool handled = executeKeybindAction(bind, nullptr, &cooldownBlocked);
+      const bool handled = executeAction(bind, nullptr, &cooldownBlocked);
       if (!handled && !cooldownBlocked) {
         return std::nullopt;
       }

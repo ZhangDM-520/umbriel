@@ -41,7 +41,6 @@ struct wlr_image_description_v1_data;
 struct wlr_ext_foreign_toplevel_handle_v1;
 struct wlr_ext_foreign_toplevel_list_v1;
 struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1;
-struct wlr_export_dmabuf_manager_v1;
 struct wlr_ext_image_copy_capture_session_v1;
 struct wlr_ext_image_capture_source_v1;
 struct wlr_foreign_toplevel_manager_v1;
@@ -193,7 +192,6 @@ namespace umbriel {
     // The security-context metadata for a restricted client, or null for a
     // client on the ordinary socket.
     [[nodiscard]] const wlr_security_context_v1_state* clientSecurityContext(const wl_client* client) const;
-    [[nodiscard]] wlr_export_dmabuf_manager_v1* exportDmabufManager() const { return m_exportDmabufManager; }
     // True while a live cursor session is attached to a capture source of this output.
     [[nodiscard]] bool hasCopyCaptureFor(const wlr_output* output) const;
     [[nodiscard]] wlr_tearing_control_manager_v1* tearingControlManager() const { return m_tearingControlManager; }
@@ -329,8 +327,8 @@ namespace umbriel {
     // Registers a view created for a new toplevel of either shell role.
     View& adoptView(std::unique_ptr<View> view);
 
-    // Runs a parsed action. Shared by the keybind path and the IPC `msg` command.
-    bool executeKeybindAction(const Keybind& bind, std::string* error = nullptr, bool* cooldownBlocked = nullptr);
+    // Runs a parsed action, whether a keybind, hot corner, overview shortcut, or IPC request triggered it.
+    bool executeAction(const Keybind& bind, std::string* error = nullptr, bool* cooldownBlocked = nullptr);
     bool cooldownAllows(const Keybind& bind);
     // Re-evaluates alone rules on every workspace whose arrange is still pending.
     void refreshPendingAloneRules();
@@ -753,7 +751,6 @@ namespace umbriel {
     wlr_foreign_toplevel_manager_v1* m_foreignToplevelManager = nullptr;
     wlr_ext_foreign_toplevel_list_v1* m_extForeignToplevelList = nullptr;
     wlr_ext_foreign_toplevel_image_capture_source_manager_v1* m_toplevelCaptureSourceManager = nullptr;
-    wlr_export_dmabuf_manager_v1* m_exportDmabufManager = nullptr;
     wlr_tearing_control_manager_v1* m_tearingControlManager = nullptr;
     wlr_ext_workspace_manager_v1* m_workspaceManager = nullptr;
     wlr_session_lock_manager_v1* m_sessionLockManager = nullptr;

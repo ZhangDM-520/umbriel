@@ -9,6 +9,7 @@
 #include "output/output.h"
 #include "scene/effect_registry.h"
 #include "scene/effect_selection.h"
+#include "server/action_request.h"
 #include "server/color_description.h"
 #include "server/focus.h"
 #include "server/server.h"
@@ -35,7 +36,7 @@ extern "C" {
 
 namespace umbriel {
 
-  nlohmann::json IpcCommands::inputCapturePermissions(Server& server, std::string_view) {
+  nlohmann::json IpcCommands::inputCapturePermissions(Server& server, IpcArgs /*args*/) {
     auto result = nlohmann::json::array();
     if (auto* capture = server.inputCapture()) {
       for (const auto& permission : capture->permissions()) {
@@ -50,12 +51,12 @@ namespace umbriel {
     return nlohmann::json{{"ok", std::move(result)}};
   }
 
-  nlohmann::json IpcCommands::inputCaptureRevoke(Server& server, std::string_view arg) {
-    if (arg.empty() || arg.find_first_of(" \t\r\n") != std::string_view::npos) {
+  nlohmann::json IpcCommands::inputCaptureRevoke(Server& server, IpcArgs args) {
+    if (args.size() != 1 || args.front().empty() || args.front().find_first_of(" \t\r\n") != std::string::npos) {
       return nlohmann::json{{"err", "usage: input-capture-revoke <id|all>"}};
     }
     auto* capture = server.inputCapture();
-    if (capture == nullptr || !capture->revokePermission(arg)) {
+    if (capture == nullptr || !capture->revokePermission(args.front())) {
       return nlohmann::json{{"err", "unable to revoke input capture permission (invalid id or state write failed)"}};
     }
     return nlohmann::json{{"ok", true}};
@@ -125,20 +126,6 @@ namespace umbriel {
         {ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT, "left"},
         {ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT, "right"},
     };
-
-    const char* layoutModeName(LayoutMode mode) {
-      switch (mode) {
-      case LayoutMode::Scrolling:
-        return "scrolling";
-      case LayoutMode::Dwindle:
-        return "dwindle";
-      case LayoutMode::Master:
-        return "master";
-      case LayoutMode::Floating:
-        return "floating";
-      }
-      return "unknown";
-    }
 
     // One human row per window entry; `focused-window` prints the same row for its reply.
     void printWindowRow(const nlohmann::json& entry) {
@@ -724,7 +711,7 @@ namespace umbriel {
       entry["tab_hidden"] = view.tabHidden();
       entry["minimizable"] = view.minimizable();
       entry["minimized"] = view.minimized();
-      entry["snap"] = view.snapRegion() ? nlohmann::json(snapRegionName(*view.snapRegion())) : nlohmann::json(nullptr);
+      entry["region"] = view.region() ? nlohmann::json(windowRegionName(*view.region())) : nlohmann::json(nullptr);
       entry["border_effect"] = effectSlotJson(view.effectSlot(EffectKind::Border), true);
       entry["window_effect"] = effectSlotJson(view.effectSlot(EffectKind::Window));
       // Workspace-local remembered focus. Seat-global activation is reported
@@ -790,7 +777,7 @@ namespace umbriel {
     return "unspecified";
   }
 
-  nlohmann::json IpcCommands::windows(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::windows(Server& server, IpcArgs /*args*/) {
     nlohmann::json windows = nlohmann::json::array();
     PendingLayouts pendingLayouts;
     for (const auto& v : server.views()) {
@@ -804,7 +791,7 @@ namespace umbriel {
 
   // The view the window actions target. The qualified call keeps the shared
   // focus policy distinct from this command's own name.
-  nlohmann::json IpcCommands::focusedWindow(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::focusedWindow(Server& server, IpcArgs /*args*/) {
     View* view = umbriel::focusedWindow(server);
     if (view == nullptr) {
       return nlohmann::json{{"err", "no focused window"}};
@@ -813,7 +800,7 @@ namespace umbriel {
     return nlohmann::json{{"ok", windowEntry(server, *view, pendingLayouts)}};
   }
 
-  nlohmann::json IpcCommands::effects(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::effects(Server& server, IpcArgs /*args*/) {
     nlohmann::json presets = nlohmann::json::array();
     for (const auto& preset : config().effects.presets) {
       nlohmann::json entry{
@@ -873,7 +860,7 @@ namespace umbriel {
     };
   }
 
-  nlohmann::json IpcCommands::workspaces(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::workspaces(Server& server, IpcArgs /*args*/) {
     nlohmann::json workspaces = nlohmann::json::array();
     const Output* preferred = server.outputFromWlr(server.preferredOutput());
     for (const auto& output : server.outputs()) {
@@ -898,11 +885,12 @@ namespace umbriel {
             {"output", output->wlr()->name},
             {"active", workspace->active()},
             {"focused", output.get() == preferred && workspace->active()},
-            {"occupied", workspace->hasViews()},
-            {"window_count", std::ranges::count_if(views, [](const View* view) { return view->mapped(); })},
+            {"occupied", workspace->occupied()},
+            {"window_count",
+             std::ranges::count_if(views, [](const View* view) { return view->mapped() && !view->pinned(); })},
             {"focused_window", focusedId != nullptr ? focusedId : ""},
             {"urgent", std::ranges::any_of(views, [](const View* view) { return view->urgent(); })},
-            {"layout", layoutModeName(workspace->layoutMode())},
+            {"layout", std::string(layoutModeName(workspace->layoutMode()))},
             {"layout_override", workspace->layoutModeOverride().has_value()},
         });
       }
@@ -910,7 +898,7 @@ namespace umbriel {
     return nlohmann::json{{"ok", workspaces}};
   }
 
-  nlohmann::json IpcCommands::submap(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::submap(Server& server, IpcArgs /*args*/) {
     nlohmann::json active = nullptr;
     if (server.inSubmap()) {
       active = server.activeSubmap();
@@ -918,7 +906,7 @@ namespace umbriel {
     return nlohmann::json{{"ok", std::move(active)}};
   }
 
-  nlohmann::json IpcCommands::layers(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::layers(Server& server, IpcArgs /*args*/) {
     nlohmann::json layers = nlohmann::json::array();
     for (const auto& l : server.layerSurfaces()) {
       auto* s = l->layerSurface();
@@ -963,7 +951,7 @@ namespace umbriel {
     return nlohmann::json{{"ok", layers}};
   }
 
-  nlohmann::json IpcCommands::outputs(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::outputs(Server& server, IpcArgs /*args*/) {
     nlohmann::json outputs = nlohmann::json::array();
     const Output* preferred = server.outputFromWlr(server.preferredOutput());
     for (const auto& output : server.outputs()) {
@@ -1047,7 +1035,7 @@ namespace umbriel {
     return nlohmann::json{{"ok", outputs}};
   }
 
-  nlohmann::json IpcCommands::color(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::color(Server& server, IpcArgs /*args*/) {
     nlohmann::json outputs = nlohmann::json::array();
     for (const auto& output : server.outputs()) {
       const wlr_output* wlrOutput = output->wlr();
@@ -1172,7 +1160,7 @@ namespace umbriel {
     };
   }
 
-  nlohmann::json IpcCommands::tearing(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::tearing(Server& server, IpcArgs /*args*/) {
     nlohmann::json outputs = nlohmann::json::array();
     for (const auto& output : server.outputs()) {
       const bool requested = output->tearingRequested();
@@ -1235,7 +1223,7 @@ namespace umbriel {
     };
   }
 
-  nlohmann::json IpcCommands::keyboardLayouts(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::keyboardLayouts(Server& server, IpcArgs /*args*/) {
     const auto state = server.keyboardLayoutState();
     if (!state.has_value()) {
       return nlohmann::json{{"err", "no keyboard"}};
@@ -1243,24 +1231,24 @@ namespace umbriel {
     return nlohmann::json{{"ok", {{"names", state->names}, {"current_index", state->currentIndex}}}};
   }
 
-  nlohmann::json IpcCommands::msg(Server& server, std::string_view arg) {
-    Keybind bind{};
-    if (!parseAction(std::string(arg), bind)) {
-      return nlohmann::json{{"err", "unknown action: " + std::string(arg)}};
-    }
+  nlohmann::json IpcCommands::action(Server& server, const nlohmann::json& request) {
     std::string error;
-    server.executeKeybindAction(bind, &error);
+    const std::optional<Keybind> bind = actionFromRequest(request, error);
+    if (!bind) {
+      return nlohmann::json{{"err", error}};
+    }
+    server.executeAction(*bind, &error);
     if (!error.empty()) {
       return nlohmann::json{{"err", error}};
     }
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::outputCreate(Server& server, std::string_view arg) {
+  nlohmann::json IpcCommands::outputCreate(Server& server, IpcArgs args) {
     std::string name;
     std::optional<OutputMode> mode;
     std::string error;
-    if (!parseOutputCreateArg(arg, name, mode, error)) {
+    if (!parseOutputCreateArgs(args, name, mode, error)) {
       return nlohmann::json{{"err", error}};
     }
     const std::string created = server.createHeadlessOutput(name, mode, &error);
@@ -1270,20 +1258,22 @@ namespace umbriel {
     return nlohmann::json{{"ok", created}};
   }
 
-  nlohmann::json IpcCommands::outputDestroy(Server& server, std::string_view arg) {
+  nlohmann::json IpcCommands::outputDestroy(Server& server, IpcArgs args) {
+    if (args.size() != 1 || args.front().empty()) {
+      return nlohmann::json{{"err", "usage: output-destroy <name>"}};
+    }
     std::string error;
-    if (!server.destroyOutput(std::string(arg), &error)) {
+    if (!server.destroyOutput(args.front(), &error)) {
       return nlohmann::json{{"err", error}};
     }
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::configReplace(Server& server, std::string_view arg) {
-    const std::filesystem::path path(arg);
-
-    if (path.empty()) {
+  nlohmann::json IpcCommands::configReplace(Server& server, IpcArgs args) {
+    if (args.size() != 1 || args.front().empty()) {
       return nlohmann::json{{"err", "usage: config-replace <path>"}};
     }
+    const std::filesystem::path path(args.front());
 
     if (!path.is_absolute()) {
       return nlohmann::json{{"err", "path must be an absolute path"}};
@@ -1300,22 +1290,20 @@ namespace umbriel {
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::settle(Server& /*server*/, std::string_view /*arg*/) {
-    return nlohmann::json{{"ok", nullptr}};
-  }
+  nlohmann::json IpcCommands::settle(Server& /*server*/, IpcArgs /*args*/) { return nlohmann::json{{"ok", nullptr}}; }
 
-  nlohmann::json IpcCommands::clockFreeze([[maybe_unused]] Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::clockFreeze([[maybe_unused]] Server& server, IpcArgs /*args*/) {
 #ifdef UMBRIEL_TEST_IPC
     server.freezeAnimationClock();
 #endif
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::clockAdvance(Server& /*server*/, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::clockAdvance(Server& /*server*/, IpcArgs /*args*/) {
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::clockResume([[maybe_unused]] Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::clockResume([[maybe_unused]] Server& server, IpcArgs /*args*/) {
 #ifdef UMBRIEL_TEST_IPC
     server.resumeAnimationClock();
 #endif
@@ -1323,8 +1311,24 @@ namespace umbriel {
   }
 
 #ifdef UMBRIEL_TEST_IPC
-  nlohmann::json IpcCommands::swipeForTest(Server& server, std::string_view arg) {
-    std::istringstream input{std::string(arg)};
+  namespace {
+    // The harness commands below parse their words as one whitespace-separated stream.
+    std::string joinArgs(IpcArgs args) {
+      std::string joined;
+      for (const auto& arg : args) {
+        if (!joined.empty()) {
+          joined += ' ';
+        }
+        joined += arg;
+      }
+      return joined;
+    }
+
+    bool onOrOff(IpcArgs args) { return args.size() == 1 && (args.front() == "on" || args.front() == "off"); }
+  } // namespace
+
+  nlohmann::json IpcCommands::swipeForTest(Server& server, IpcArgs args) {
+    std::istringstream input{joinArgs(args)};
     std::string phase;
     uint32_t time = 0;
     double dx = 0, dy = 0;
@@ -1364,40 +1368,40 @@ namespace umbriel {
     };
   }
 
-  nlohmann::json IpcCommands::animationCaptureFail(Server& server, std::string_view arg) {
-    if (arg != "on" && arg != "off") {
+  nlohmann::json IpcCommands::animationCaptureFail(Server& server, IpcArgs args) {
+    if (!onOrOff(args)) {
       return nlohmann::json{{"err", "expected on or off"}};
     }
-    fx_renderer_fail_animation_capture_for_test(server.renderer(), arg == "on");
+    fx_renderer_fail_animation_capture_for_test(server.renderer(), args.front() == "on");
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::blurCompositeSplit(Server& server, std::string_view arg) {
-    if (arg != "on" && arg != "off") {
+  nlohmann::json IpcCommands::blurCompositeSplit(Server& server, IpcArgs args) {
+    if (!onOrOff(args)) {
       return nlohmann::json{{"err", "expected on or off"}};
     }
-    fx_renderer_split_blur_composite_for_test(server.renderer(), arg == "on");
+    fx_renderer_split_blur_composite_for_test(server.renderer(), args.front() == "on");
     for (const auto& output : server.outputs()) {
       output->scheduleFullFrame();
     }
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::rendererRecover(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::rendererRecover(Server& server, IpcArgs /*args*/) {
     server.emitRendererLostForTest();
     server.emitRendererLostForTest();
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::planeCursor(Server& server, std::string_view arg) {
+  nlohmann::json IpcCommands::planeCursor(Server& server, IpcArgs args) {
     std::string error;
-    if (!server.injectPlaneCursor(arg, &error)) {
+    if (!server.injectPlaneCursor(joinArgs(args), &error)) {
       return nlohmann::json{{"err", error}};
     }
     return nlohmann::json{{"ok", nullptr}};
   }
 
-  nlohmann::json IpcCommands::effectFrames(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::effectFrames(Server& server, IpcArgs /*args*/) {
     nlohmann::json outputs = nlohmann::json::array();
     for (const auto& output : server.outputs()) {
       outputs.push_back({
@@ -1409,7 +1413,7 @@ namespace umbriel {
     return nlohmann::json{{"ok", {{"outputs", std::move(outputs)}}}};
   }
 
-  nlohmann::json IpcCommands::cursorState(Server& server, std::string_view /*arg*/) {
+  nlohmann::json IpcCommands::cursorState(Server& server, IpcArgs /*args*/) {
     const Cursor* cursor = server.cursor();
     nlohmann::json image = nullptr;
     if (const std::optional<Cursor::RenderedCursorStateForTest> rendered = cursor->renderedCursorStateForTest()) {
@@ -1432,32 +1436,18 @@ namespace umbriel {
   }
 #endif
 
-  bool
-  parseOutputCreateArg(std::string_view arg, std::string& name, std::optional<OutputMode>& mode, std::string& error) {
-    const size_t nameStart = arg.find_first_not_of(" \t");
-    if (nameStart == std::string_view::npos) {
+  bool parseOutputCreateArgs(IpcArgs args, std::string& name, std::optional<OutputMode>& mode, std::string& error) {
+    if (args.empty() || args.size() > 2 || args.front().empty()) {
       error = "usage: output-create <name> [mode]";
       return false;
     }
-    const size_t nameEnd = arg.find_first_of(" \t", nameStart);
-    name = arg.substr(nameStart, nameEnd == std::string_view::npos ? arg.size() : nameEnd - nameStart);
-    if (nameEnd == std::string_view::npos) {
+    name = args.front();
+    if (args.size() == 1) {
       return true;
     }
-    const size_t modeStart = arg.find_first_not_of(" \t", nameEnd);
-    if (modeStart == std::string_view::npos) {
-      return true;
-    }
-    const size_t modeEnd = arg.find_first_of(" \t", modeStart);
-    if (modeEnd != std::string_view::npos && arg.find_first_not_of(" \t", modeEnd) != std::string_view::npos) {
-      error = "usage: output-create <name> [mode]";
-      return false;
-    }
-    const std::string_view modeText =
-        arg.substr(modeStart, modeEnd == std::string_view::npos ? arg.size() : modeEnd - modeStart);
     OutputMode parsed;
-    if (!parseOutputMode(modeText, parsed)) {
-      error = "invalid mode: " + std::string(modeText) + " (use WIDTHxHEIGHT[@HZ])";
+    if (!parseOutputMode(args[1], parsed)) {
+      error = "invalid mode: " + args[1] + " (use WIDTHxHEIGHT[@HZ])";
       return false;
     }
     mode = parsed;
@@ -1469,8 +1459,6 @@ namespace umbriel {
        &IpcCommands::inputCapturePermissions, nullptr},
       {"input-capture-revoke", "<id|all>", "forget capture permission and stop sessions using it",
        IpcCommandGroup::Control, true, &IpcCommands::inputCaptureRevoke, nullptr},
-      {"msg", "<action> [args...]", "send an action to the compositor", IpcCommandGroup::Control, true,
-       &IpcCommands::msg, nullptr},
       {"output-create", "<name> [mode]", "create a virtual output (optional mode, as 1920x1080@60)",
        IpcCommandGroup::Control, true, &IpcCommands::outputCreate, &printOutputName},
       {"output-destroy", "<name>", "destroy a virtual output", IpcCommandGroup::Control, true,

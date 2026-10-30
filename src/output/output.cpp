@@ -340,21 +340,13 @@ namespace umbriel {
 
   int Output::externalRenderLocks() const { return m_output->attach_render_locks - (m_animationRenderLocked ? 1 : 0); }
 
-  int Output::captureRenderLocks(int externalLocks) const {
-    if (wlr_export_dmabuf_manager_v1* manager = m_server->exportDmabufManager()) {
-      wlr_export_dmabuf_frame_v1* frame;
-      wl_list_for_each(frame, &manager->frames, link) {
-        if (frame->output == m_output) {
-          --externalLocks;
-        }
-      }
-    }
-    return externalLocks;
-  }
-
   bool Output::effectCapturePending(int captureLocks) const {
     // Keyed on configuration, not instances: a close snapshot keeps its window slots after its instances leave.
     return captureLocks > 0 && !config().effects.inCapture && m_server->effects().inPlaceReferenced();
+  }
+
+  bool Output::captureExclusionPending(int captureLocks) const {
+    return captureLocks > 0 && umbrielfx_scene_has_capture_exclusion(m_sceneOutput->scene);
   }
 
   unsigned Output::effectEligible() const { return m_server->effects().ledger().eligible(this); }
@@ -980,11 +972,12 @@ namespace umbriel {
           }
         }
 
-        const int captureLocks = captureRenderLocks(externalRenderLocks());
+        const int captureLocks = externalRenderLocks();
         wlr_scene_output_state_options sceneOptions{};
         sceneOptions.capture_sdr = targetHdr && captureLocks > 0;
         sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
-        m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
+        sceneOptions.capture_exclusion = captureExclusionPending(captureLocks);
+        m_effectCaptureBuilt = sceneOptions.effect_capture_pending || sceneOptions.capture_exclusion;
         // The SDR gamut mapping rides the scene's supplied transform. An active
         // HDR image description owns the output transform instead (the scene
         // asserts the two are never combined).
@@ -1473,7 +1466,7 @@ namespace umbriel {
     }
     // Only an output whose capture source carries a live cursor-metadata
     // session is paced. The session bookkeeping and the source mapping live
-    // in Server; screencopy and export-dmabuf never register there.
+    // in Server; screencopy never registers there.
     return m_server->hasCopyCaptureFor(m_output);
   }
 
@@ -2155,11 +2148,12 @@ namespace umbriel {
       wlr_output_state_init(&state);
 
       bool commitOk = false;
-      const int captureLocks = captureRenderLocks(externalLocks);
+      const int captureLocks = externalLocks;
       wlr_scene_output_state_options sceneOptions{};
       sceneOptions.capture_sdr = hdrActive() && captureLocks > 0;
       sceneOptions.effect_capture_pending = effectCapturePending(captureLocks);
-      m_effectCaptureBuilt = sceneOptions.effect_capture_pending;
+      sceneOptions.capture_exclusion = captureExclusionPending(captureLocks);
+      m_effectCaptureBuilt = sceneOptions.effect_capture_pending || sceneOptions.capture_exclusion;
       if (sdrGamutStaged(m_sdrGamutTransform != nullptr, configuredSdrGamut(), hdrActive())) {
         sceneOptions.color_transform = m_sdrGamutTransform.get();
       }
@@ -2255,7 +2249,8 @@ namespace umbriel {
     }
 
     // Screencopy drops its lock inside the commit; image-copy sessions ask for the release frame when they end.
-    if (m_effectCaptureBuilt && !effectCapturePending(captureRenderLocks(externalRenderLocks()))) {
+    if (m_effectCaptureBuilt
+        && !(effectCapturePending(externalRenderLocks()) || captureExclusionPending(externalRenderLocks()))) {
       scheduleEffectCaptureRelease();
     }
 

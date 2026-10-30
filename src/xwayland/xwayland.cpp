@@ -227,6 +227,12 @@ namespace umbriel {
     return m_outputs->advertise(client, global, m_wlr->server != nullptr ? m_wlr->server->client : nullptr);
   }
 
+  void Xwayland::refreshCaptureProtection() {
+    for (const auto& window : m_windows) {
+      window->refreshCaptureProtection();
+    }
+  }
+
   void Xwayland::handleOutputLayoutChange() {
     updatePrimaryOutput();
     if (!m_outputs->update()) {
@@ -242,6 +248,33 @@ namespace umbriel {
     m_primary->setOutput(m_outputs->primaryOutput(config().general.xwaylandPrimaryOutput));
   }
 
+  uint64_t Xwayland::requestXwmSync(wlr_xwayland_surface* xsurface) {
+    xcb_connection_t* connection = wlr_xwayland_get_xwm_connection(m_wlr);
+    if (connection == nullptr
+        || connection != m_xwmSyncConnection
+        || m_xwmSyncWindow == XCB_NONE
+        || xcb_connection_has_error(connection) != 0) {
+      kLog.error("cannot synchronize X11 window {} before presentation: XWM barrier unavailable", xsurface->window_id);
+      return 0;
+    }
+    if (++m_xwmSyncSerial == 0) {
+      ++m_xwmSyncSerial;
+    }
+    xcb_client_message_event_t sync{};
+    sync.response_type = XCB_CLIENT_MESSAGE;
+    sync.format = 32;
+    sync.window = m_xwmSyncWindow;
+    sync.data.data32[0] = xsurface->window_id;
+    sync.data.data32[1] = static_cast<uint32_t>(m_xwmSyncSerial);
+    sync.data.data32[2] = static_cast<uint32_t>(m_xwmSyncSerial >> 32);
+    xcb_send_event(connection, 0, m_xwmSyncWindow, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<const char*>(&sync));
+    if (xcb_flush(connection) <= 0) {
+      kLog.error("cannot synchronize X11 window {} before presentation: XWM flush failed", xsurface->window_id);
+      return 0;
+    }
+    return m_xwmSyncSerial;
+  }
+
   void Xwayland::scheduleFocusClear() {
     if (m_focusClearTimer != nullptr) {
       // A zero Wayland timer is disarmed. One millisecond puts this on the next event-loop turn, after the current
@@ -252,6 +285,8 @@ namespace umbriel {
 
   void Xwayland::onServerStart(wl_listener* listener, void* /*data*/) {
     Xwayland* self = wl_container_of(listener, self, m_serverStart); // NOLINT(modernize-use-auto)
+    self->m_xwmSyncConnection = nullptr;
+    self->m_xwmSyncWindow = XCB_NONE;
     self->m_shapes->stop();
     self->m_primary->stop();
     if (self->m_clientDestroy.link.next != nullptr) {
@@ -274,12 +309,37 @@ namespace umbriel {
     Xwayland* self = wl_container_of(listener, self, m_clientDestroy); // NOLINT(modernize-use-auto)
     wl_list_remove(&self->m_clientDestroy.link);
     self->m_clientDestroy.link = {};
+    self->m_xwmSyncConnection = nullptr;
+    self->m_xwmSyncWindow = XCB_NONE;
     self->m_shapes->stop();
     self->m_primary->stop();
   }
 
   bool Xwayland::onXEvent(wlr_xwayland* xwayland, xcb_generic_event_t* event) {
     auto* self = static_cast<Xwayland*>(xwayland->data);
+    const uint8_t type = event->response_type & 0x7f;
+    if (self->m_xwmSyncWindow != XCB_NONE) {
+      if (type == XCB_CREATE_NOTIFY
+          && reinterpret_cast<const xcb_create_notify_event_t*>(event)->window == self->m_xwmSyncWindow) {
+        return true;
+      }
+      if (type == XCB_CLIENT_MESSAGE) {
+        const auto* message = reinterpret_cast<const xcb_client_message_event_t*>(event);
+        if (message->window == self->m_xwmSyncWindow) {
+          if (message->format == 32 && message->type == XCB_ATOM_NONE) {
+            const uint64_t serial = message->data.data32[1] | (uint64_t{message->data.data32[2]} << 32);
+            const auto window = std::ranges::find(
+                self->m_windows, message->data.data32[0],
+                [](const std::unique_ptr<XwaylandWindow>& candidate) { return candidate->xsurface()->window_id; }
+            );
+            if (serial != 0 && window != self->m_windows.end()) {
+              (*window)->handleXwmSync(serial);
+            }
+          }
+          return true;
+        }
+      }
+    }
     return self->m_primary->handleEvent(event) || self->m_shapes->handleEvent(event);
   }
 
@@ -322,6 +382,21 @@ namespace umbriel {
   }
 
   void Xwayland::handleReady() {
+    m_xwmSyncConnection = wlr_xwayland_get_xwm_connection(m_wlr);
+    if (m_xwmSyncConnection != nullptr) {
+      const xcb_screen_iterator_t screens = xcb_setup_roots_iterator(xcb_get_setup(m_xwmSyncConnection));
+      if (screens.rem != 0) {
+        m_xwmSyncWindow = xcb_generate_id(m_xwmSyncConnection);
+        xcb_create_window(
+            m_xwmSyncConnection, 0, m_xwmSyncWindow, screens.data->root, -1, -1, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_ONLY,
+            XCB_COPY_FROM_PARENT, 0, nullptr
+        );
+        xcb_flush(m_xwmSyncConnection);
+      }
+    }
+    if (m_xwmSyncWindow == XCB_NONE) {
+      kLog.error("could not create the XWM presentation barrier window");
+    }
     updatePrimaryOutput();
     m_primary->start(m_wlr);
     m_shapes->start(m_wlr);

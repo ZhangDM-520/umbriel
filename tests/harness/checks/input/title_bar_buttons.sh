@@ -89,7 +89,7 @@ expect_slots 14=green 36=yellow 58=blue
 # Clicking minimize hides the window; naming it brings it back.
 "$UMBRIEL_POINTER_CLIENT" 1280 720 move 595 95 click 272
 wait_field minimized true
-"$UMBRIEL" msg "window-focus:$id" > /dev/null
+"$UMBRIEL" msg window-focus "$id" > /dev/null
 wait_field minimized false
 
 # A tiled window cannot minimize, so its bar has no minimize button.

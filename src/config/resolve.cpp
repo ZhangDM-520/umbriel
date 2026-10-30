@@ -132,6 +132,9 @@ namespace umbriel {
       if (overrides.master.position) {
         resolved.master.position = *overrides.master.position;
       }
+      if (overrides.stacking.dropZones) {
+        resolved.stacking.dropZones = *overrides.stacking.dropZones;
+      }
       if (overrides.extentPresets) {
         resolved.extentPresets = *overrides.extentPresets;
       }
@@ -343,6 +346,9 @@ namespace umbriel {
       if (rule.allowShortcutsInhibit) {
         resolved.allowShortcutsInhibit = rule.allowShortcutsInhibit;
       }
+      if (rule.blockCapture) {
+        resolved.blockCapture = rule.blockCapture;
+      }
       if (rule.backgroundRender) {
         resolved.backgroundRender = rule.backgroundRender;
       }
@@ -488,6 +494,7 @@ namespace umbriel {
     resolved.master.newOnTop = config.layout.master.newOnTop;
     resolved.master.newBecomesMaster = config.layout.master.newBecomesMaster;
     resolved.master.position = config.layout.master.position;
+    resolved.stacking.dropZones = config.layout.stacking.dropZones;
     resolved.tabs.defaultDisplay = config.layout.tabs.defaultDisplay;
     resolved.tabs.newTabPosition = config.layout.tabs.newTabPosition;
     resolved.tabs.wrapFocus = config.layout.tabs.wrapFocus;

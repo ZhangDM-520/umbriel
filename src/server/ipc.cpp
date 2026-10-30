@@ -15,11 +15,13 @@
 #include <cstdlib>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 #include <wayland-server-core.h>
 
 namespace umbriel {
@@ -34,6 +36,23 @@ namespace umbriel {
     constexpr int kAudioFreshnessMs = 250;
     // Long enough for any configured animation to finish; a compositor that never settles still answers.
     constexpr int kFrameWaitTimeoutMs = 30000;
+
+    // A request's `args`: present, an array, and strings only.
+    std::optional<std::vector<std::string>> requestArgs(const nlohmann::json& request) {
+      const auto args = request.find("args");
+      if (args == request.end() || !args->is_array()) {
+        return std::nullopt;
+      }
+      std::vector<std::string> result;
+      result.reserve(args->size());
+      for (const auto& arg : *args) {
+        if (!arg.is_string()) {
+          return std::nullopt;
+        }
+        result.push_back(arg.get<std::string>());
+      }
+      return result;
+    }
 
     nlohmann::json themeEvent() {
       const auto& current = config();
@@ -531,6 +550,9 @@ namespace umbriel {
       refreshScreenCastActive();
       return R"({"ok":null})";
     }
+    if (cmd == "action") {
+      return IpcCommands::action(*m_server, req).dump();
+    }
     if (cmd == "subscribe") {
       if (!req.contains("events") || !req["events"].is_array() || req["events"].empty()) {
         return R"({"err":"malformed request"})";
@@ -604,10 +626,14 @@ namespace umbriel {
       return std::nullopt;
     }
     if (cmd == "clock-advance") {
-      if (!req.contains("arg") || !req["arg"].is_string()) {
+      const auto args = requestArgs(req);
+      if (!args) {
         return R"({"err":"malformed request"})";
       }
-      const auto& arg = req["arg"].get_ref<const std::string&>();
+      if (args->size() != 1) {
+        return R"({"err":"usage: clock-advance <ms>"})";
+      }
+      const std::string& arg = args->front();
       uint64_t ms = 0;
       const auto [end, error] = std::from_chars(arg.data(), arg.data() + arg.size(), ms);
       if (error != std::errc{} || end != arg.data() + arg.size() || ms == 0) {
@@ -617,14 +643,15 @@ namespace umbriel {
       if (!m_server->advanceAnimationClock(ms)) {
         return R"({"err":"the animation clock is not frozen"})";
       }
-      beginFrameWait(connection, FrameWait::Drawn, IpcCommands::clockAdvance(*m_server, arg).dump());
+      beginFrameWait(connection, FrameWait::Drawn, IpcCommands::clockAdvance(*m_server, *args).dump());
       return std::nullopt;
     }
     if (cmd == "blur-composite-split") {
-      if (!req.contains("arg") || !req["arg"].is_string()) {
+      const auto args = requestArgs(req);
+      if (!args) {
         return R"({"err":"malformed request"})";
       }
-      nlohmann::json reply = IpcCommands::blurCompositeSplit(*m_server, req["arg"].get_ref<const std::string&>());
+      nlohmann::json reply = IpcCommands::blurCompositeSplit(*m_server, *args);
       if (reply.contains("err")) {
         return reply.dump();
       }
@@ -637,14 +664,15 @@ namespace umbriel {
     if (spec == nullptr) {
       return nlohmann::json{{"err", "unknown command: " + cmd}}.dump();
     }
-    std::string arg;
-    if (spec->takesArg) {
-      if (!req.contains("arg") || !req["arg"].is_string()) {
+    std::vector<std::string> args;
+    if (spec->takesArgs) {
+      auto requested = requestArgs(req);
+      if (!requested) {
         return R"({"err":"malformed request"})";
       }
-      arg = req["arg"].get<std::string>();
+      args = std::move(*requested);
     }
-    return spec->handle(*m_server, arg).dump();
+    return spec->handle(*m_server, args).dump();
   }
 
   void Ipc::broadcastEvent(uint16_t event, const nlohmann::json& payload) {

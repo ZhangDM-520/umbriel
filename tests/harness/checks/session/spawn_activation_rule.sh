@@ -33,7 +33,7 @@ if [[ -z ${target_id:-} ]]; then
   echo "rule target did not map with its initial app ID: $windows"
   exit 1
 fi
-"$UMBRIEL" msg "window-close:$target_id" > /dev/null
+"$UMBRIEL" msg window-close "$target_id" > /dev/null
 for _ in $(seq 60); do
   grep -q '^unmapped$' "$CLIENT_LOG" && break
   sleep 0.1
@@ -43,9 +43,9 @@ if ! grep -q '^unmapped$' "$CLIENT_LOG"; then
   exit 1
 fi
 
-"$UMBRIEL" msg workspace-switch:2 > /dev/null
+"$UMBRIEL" msg workspace-switch 2 > /dev/null
 "$UMBRIEL" msg \
-  "spawn:printf '%s\n' \"\$XDG_ACTIVATION_TOKEN\" > '$TOKEN_FILE'; printf a > '$CONTROL_FIFO'" > /dev/null
+  spawn "printf '%s\n' \"\$XDG_ACTIVATION_TOKEN\" > '$TOKEN_FILE'; printf a > '$CONTROL_FIFO'" > /dev/null
 for _ in $(seq 60); do
   windows=$("$UMBRIEL" windows --json)
   target=$(jq -c '.[] | select(.app_id == "spawn-rule-target")' <<< "$windows")

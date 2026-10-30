@@ -10,22 +10,66 @@ Each request and reply is one JSON object per line:
 printf '{"cmd":"workspaces"}\n' | socat -t 5 STDIO "$UMBRIEL_SOCKET"
 ```
 
-Replies use `{"ok": ...}` or `{"err": "..."}`.
+Replies use `{"ok": ...}` or `{"err": "..."}`. Commands that take arguments send them as an `args` array of strings, one per command-line word.
 
 ## Queries
 
-| Request                                       | CLI                                        |
-| --------------------------------------------- | ------------------------------------------ |
-| `{"cmd":"effects"}`                           | `umbriel effects --json`                   |
-| `{"cmd":"windows"}`                           | `umbriel windows --json`                   |
-| `{"cmd":"focused-window"}`                    | `umbriel focused-window --json`            |
-| `{"cmd":"workspaces"}`                        | `umbriel workspaces --json`                |
-| `{"cmd":"submap"}`                            | `umbriel submap --json`                    |
-| `{"cmd":"layers"}`                            | `umbriel layers --json`                    |
-| `{"cmd":"outputs"}`                           | `umbriel outputs --json`                   |
-| `{"cmd":"input-capture-permissions"}`         | `umbriel input-capture-permissions --json` |
-| `{"cmd":"input-capture-revoke","arg":"<id>"}` | `umbriel input-capture-revoke <id>`        |
-| `{"cmd":"msg","arg":"<action>"}`              | `umbriel msg <action>`                     |
+| Request                                          | CLI                                        |
+| ------------------------------------------------ | ------------------------------------------ |
+| `{"cmd":"effects"}`                              | `umbriel effects --json`                   |
+| `{"cmd":"windows"}`                              | `umbriel windows --json`                   |
+| `{"cmd":"focused-window"}`                       | `umbriel focused-window --json`            |
+| `{"cmd":"workspaces"}`                           | `umbriel workspaces --json`                |
+| `{"cmd":"submap"}`                               | `umbriel submap --json`                    |
+| `{"cmd":"layers"}`                               | `umbriel layers --json`                    |
+| `{"cmd":"outputs"}`                              | `umbriel outputs --json`                   |
+| `{"cmd":"input-capture-permissions"}`            | `umbriel input-capture-permissions --json` |
+| `{"cmd":"input-capture-revoke","args":["<id>"]}` | `umbriel input-capture-revoke <id>`        |
+
+## Actions
+
+Programs run an [action](actions.md) with a typed request instead of the words people type:
+
+```json
+{ "cmd": "action", "action": "window-focus", "window": "<window-id>" }
+```
+
+`umbriel msg <action> [args...]` parses its words and sends this same request. The reply is `{"ok": null}` or `{"err": "..."}`. A field that the action does not take, a missing required field, a wrong JSON type, or an empty string is rejected with the field named in the error. Optional fields are left out rather than sent empty.
+
+| Argument form (see [Actions](actions.md#argument-forms)) | Fields                                                                                                           |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `<cmd...>`                                               | `command`: string, run through the shell                                                                         |
+| submap `<name>`                                          | `submap`: string                                                                                                 |
+| `<fraction>`                                             | `fraction`: number                                                                                               |
+| `<delta>`                                                | `delta`: number                                                                                                  |
+| `<workspace> [--output <output>]`                        | `workspace`: a position number, or a name string even when it has only digits; optional `output`: string         |
+| `<output>`, `[<output>]`                                 | `output`: string, required or optional as in the argument form                                                   |
+| `<window-id>`, `[<window-id>]`                           | `window`: string, required or optional as in the argument form                                                   |
+| `[<scratchpad>]`                                         | optional `scratchpad`: string                                                                                    |
+| effect `set`                                             | `effect`: string; optional `window` (window and border effects) or `output` (screen effects)                     |
+| effect `cycle`                                           | optional `pool`: string; optional `window` or `output` as for `set`                                              |
+| `<nits> [--output <output>]`                             | `nits`: number; optional `output`: string                                                                        |
+| layout mode                                              | `layout`: `"scrolling"`, `"dwindle"`, `"master"`, `"stacking"`, or `"toggle"`; with `"toggle"`, optional `cycle` |
+| `<normal\|tabbed>`                                       | `display`: `"normal"` or `"tabbed"`                                                                              |
+| `<index>`                                                | `index`: integer                                                                                                 |
+| `[skip-confirmation]`                                    | optional `skip_confirmation`: boolean                                                                            |
+| region                                                   | `region`: string                                                                                                 |
+| `<anchor> <x> <y> [--window <window-id>]`                | `anchor`: string; `x`, `y`: integers; optional `window`: string                                                  |
+| `<delta-x> <delta-y> [--window <window-id>]`             | `dx`, `dy`: integers; optional `window`: string                                                                  |
+
+`workspace-move-to-output` requires a `destination` string (connector, monitor identity, or `current`). Optional `workspace` and `output` fields select the source using the same types as `workspace-switch`; `output` requires `workspace`.
+
+```json
+{"cmd":"action","action":"workspace-move-to-output","destination":"current","workspace":"WEB","output":"DP-1"}
+```
+
+`cycle` is an array of two or more distinct layout names. Value ranges match the argument forms. For example:
+
+```json
+{"cmd":"action","action":"workspace-switch","workspace":2,"output":"DP-1"}
+{"cmd":"action","action":"workspace-set-layout","layout":"toggle","cycle":["scrolling","master"]}
+{"cmd":"action","action":"session-quit","skip_confirmation":true}
+```
 
 Window entries include IDs, application identity, process ID, geometry, output, workspace, and scratchpad membership. X11 windows report the process ID they publish as `_NET_WM_PID`, or `-1` when they publish none. A member of a [tab group](layout.md#tab-groups) reports `tabbed`, its place among the group's tabs as `tab_index` (from 0, `-1` outside a group), and `tab_hidden` while its group shows another tab; the plain listing marks it `tab` instead of `tile`.
 
@@ -36,19 +80,19 @@ Window state follows what Umbriel has decided, ahead of the client's redraw, the
 | Field                | Meaning                                                                                                                                                                                                                                                                      |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `floating`           | Outside the tiled layout                                                                                                                                                                                                                                                     |
-| `snap`               | Snapped region (`left`, `right`, `top`, `bottom`, `top_left`, `top_right`, `bottom_left`, `bottom_right`), or `null`; retained under maximize and fullscreen                                                                                                                 |
+| `region`             | Edge placement region (`left`, `right`, `top`, `bottom`, `top_left`, `top_right`, `bottom_left`, `bottom_right`), or `null`; retained under maximize and fullscreen within stacking                                                                                          |
 | `title_bar`          | Umbriel's server-side title bar is enabled for this window in its current state                                                                                                                                                                                              |
 | `fullscreen`         | Fullscreen                                                                                                                                                                                                                                                                   |
 | `maximized`          | Maximized by `window-toggle-maximize` (a full-width column for a tiled window) or by maximize-to-edges                                                                                                                                                                       |
 | `maximized_to_edges` | Maximized without gaps, struts, or borders                                                                                                                                                                                                                                   |
-| `pinned`             | Pinned above other windows on every workspace of its output                                                                                                                                                                                                                  |
+| `pinned`             | Pinned above other windows on every workspace of its output. Its `workspace` is always the output's active workspace                                                                                                                                                         |
 | `minimizable`        | Supports minimize in its current placement: a mapped, unattached floating window on a workspace, outside a scratchpad and not pinned. Matches the minimize capability offered to the application; fullscreen or an active move or resize can still reject a minimize request |
 | `minimized`          | Hidden by `window-minimize`, the application, or a taskbar; see [Minimize](layout.md#minimize)                                                                                                                                                                               |
 | `visible`            | On its output's active workspace (or pinned), not a hidden tab, not minimized, and not in a hidden scratchpad; it may still be scrolled out of view                                                                                                                          |
 | `parent`             | ID of the window the client named as its parent, or `""`                                                                                                                                                                                                                     |
 | `column`, `row`      | Place in a scrolling strip, from 0; `-1` for floating windows and other layouts                                                                                                                                                                                              |
 
-Workspace entries include a stable ID, display name, index, output, layout, occupancy, and active and focused states. The `layout` field is `"scrolling"`, `"dwindle"`, `"master"`, or `"floating"`. Use the `named` boolean instead of guessing from the display name; an explicitly named workspace may still be called `"2"`. `window_count` counts its mapped windows, `focused_window` is the ID of the window it last focused (`""` when none), `urgent` is set while any of its windows is urgent, and `layout_override` is set while a runtime `workspace-set-layout` replaces the configured layout.
+Workspace entries include a stable ID, display name, index, output, layout, occupancy, and active and focused states. The `layout` field is `"scrolling"`, `"dwindle"`, `"master"`, or `"stacking"`. Use the `named` boolean instead of guessing from the display name; an explicitly named workspace may still be called `"2"`. `window_count` counts its mapped windows. Pinned windows belong to the output, so neither `occupied` nor `window_count` includes them. `focused_window` is the ID of the window it last focused (`""` when none), `urgent` is set while any of its windows is urgent, and `layout_override` is set while a runtime `workspace-set-layout` replaces the configured layout.
 
 Layer entries describe layer-shell surfaces such as panels, launchers, and wallpapers: `layer`, `namespace`, `output`, `mapped`, `pid`, `keyboard_interactivity` (`none`, `exclusive`, or `on_demand`), `focused` while the surface holds the keyboard, `exclusive_zone`, `anchor` (the anchored edges), `margin`, and the arranged geometry `x`, `y`, `w`, and `h` in layout coordinates.
 
@@ -224,9 +268,9 @@ Disconnect, malformed or oversized input, or 250 ms without a snapshot closes th
 
 ## Virtual outputs
 
-| Request                                         | CLI                                   |
-| ----------------------------------------------- | ------------------------------------- |
-| `{"cmd":"output-create","arg":"<name> [mode]"}` | `umbriel output-create <name> [mode]` |
-| `{"cmd":"output-destroy","arg":"<name>"}`       | `umbriel output-destroy <name>`       |
+| Request                                                                                             | CLI                                   |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `{"cmd":"output-create","args":["<name>"]}` or `{"cmd":"output-create","args":["<name>","<mode>"]}` | `umbriel output-create <name> [mode]` |
+| `{"cmd":"output-destroy","args":["<name>"]}`                                                        | `umbriel output-destroy <name>`       |
 
 `output-create` replies with the new output's name. Its optional mode is in the `WIDTHxHEIGHT[@HZ]` form. Both commands reply with an error for a name that is invalid, already taken, or unknown, and `output-destroy` refuses outputs backed by a real display. See [Virtual outputs](outputs.md#virtual-outputs).

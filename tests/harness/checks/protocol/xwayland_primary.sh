@@ -106,10 +106,10 @@ done
 await_primary HEADLESS-1
 printf 'quit\n' >&"$other_fd"
 wait "$other_pid"
-"$UMBRIEL" msg workspace-switch:1/HEADLESS-3 > /dev/null
+"$UMBRIEL" msg workspace-switch 1 --output HEADLESS-3 > /dev/null
 "$UMBRIEL" settle > /dev/null
 await_primary HEADLESS-1
-"$UMBRIEL" msg workspace-switch:1/HEADLESS-2 > /dev/null
+"$UMBRIEL" msg workspace-switch 1 --output HEADLESS-2 > /dev/null
 "$UMBRIEL" settle > /dev/null
 await_primary HEADLESS-1
 configure_primary HEADLESS-2
@@ -117,9 +117,9 @@ await_primary HEADLESS-2
 configure_primary HEADLESS-1
 await_primary HEADLESS-1
 
-"$UMBRIEL" msg output-disable:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg output-disable HEADLESS-1 > /dev/null
 await_primary ''
-"$UMBRIEL" msg output-enable:HEADLESS-1 > /dev/null
+"$UMBRIEL" msg output-enable HEADLESS-1 > /dev/null
 await_primary HEADLESS-1
 old_id=$("$QUERY" | jq .id)
 "$UMBRIEL" output-destroy HEADLESS-1 > /dev/null

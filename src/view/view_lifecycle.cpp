@@ -35,6 +35,22 @@ namespace umbriel {
     // Distance the built-in windows_in "slide" style starts an opener below its resting position.
     constexpr int kOpenSlidePx = 60;
 
+    std::array<int, 2> floatingRuleSize(const ResolvedWindowRule& rule, const SizeHints& hints, const wlr_box& usable) {
+      int width = 0;
+      int height = 0;
+      if (rule.defaultFloatingWidthPx) {
+        width = clampWidth(*rule.defaultFloatingWidthPx, hints);
+      } else if (rule.defaultFloatingWidth && usable.width > 0) {
+        width = clampWidth(floatingFractionSize(*rule.defaultFloatingWidth, usable.width), hints);
+      }
+      if (rule.defaultFloatingHeightPx) {
+        height = clampHeight(*rule.defaultFloatingHeightPx, hints);
+      } else if (rule.defaultFloatingHeight && usable.height > 0) {
+        height = clampHeight(floatingFractionSize(*rule.defaultFloatingHeight, usable.height), hints);
+      }
+      return {width, height};
+    }
+
     constexpr int contentTypePriority(ContentType type) {
       switch (type) {
       case ContentType::Game:
@@ -205,6 +221,7 @@ namespace umbriel {
       // committedContentBox() until the client redraws at the configured size.
       handleCommit(true);
     }
+    const auto openingFloatingRuleSize = std::exchange(m_openingFloatingRuleSize, std::array<int, 2>{});
     m_mapped = true;
     m_effects.resetSlots();
     m_tiledOpeningDeferred = false;
@@ -342,17 +359,27 @@ namespace umbriel {
     if (placed && !assignedScratchpad && rule.defaultPinned && *rule.defaultPinned) {
       setPinned(true, false);
     }
+    std::optional<std::array<int, 2>> mapFloatingSize;
+    if (placed && !m_tiled && !scheduledFullscreen() && !scheduledMaximized()) {
+      // The title can select a different rule after the opening configure but before the first buffer maps.
+      // Preserve the client's committed size on axes whose rule dimensions were already configured.
+      const auto size = floatingRuleSize(rule, sizeHints(), floatingUsableArea());
+      const bool resizeWidth = size[0] > 0 && size[0] != openingFloatingRuleSize[0];
+      const bool resizeHeight = size[1] > 0 && size[1] != openingFloatingRuleSize[1];
+      if (resizeWidth || resizeHeight) {
+        mapFloatingSize = {resizeWidth ? size[0] : mapGeo.width, resizeHeight ? size[1] : mapGeo.height};
+        requestFloatingSize((*mapFloatingSize)[0], (*mapFloatingSize)[1]);
+      }
+    }
     if (assignedScratchpad) {
       // Scratchpad admission has detached the view from its workspace, so its
       // assigned scratchpad output now supplies the correct usable area.
-      placeInUsableArea(rule.defaultPosition);
+      placeInUsableArea(rule.defaultPosition, mapFloatingSize);
       if (ScratchpadManager* scratchpad = m_server->scratchpadManager()) {
         scratchpad->syncViewPresentation(this);
       }
     } else if (!assignedScratchpad && !m_tiled) {
-      // The initial commit already applied the floating size rules. Re-requesting them here
-      // races the client's first content-driven resize.
-      placeInUsableArea(rule.defaultPosition);
+      placeInUsableArea(rule.defaultPosition, mapFloatingSize);
       // Enable + clip the float against its home output now that per-output
       // visibility is resolved data-side (no per-render-pass pass to do it).
       if (m_workspace != nullptr) {
@@ -594,7 +621,7 @@ namespace umbriel {
     m_floatingMaximized = false;
     m_maximizedToEdges = false;
     m_hasFullscreenRestoreBox = false;
-    clearSnapState();
+    clearRegionState();
     m_restorePinnedAfterFullscreen = false;
     m_xCompositorFullscreen = false;
     if (m_pinned) {
@@ -673,7 +700,7 @@ namespace umbriel {
     const bool hadRuntimeEffects = m_effects.slot(EffectKind::Border).runtimeSelector.has_value()
         || m_effects.slot(EffectKind::Window).runtimeSelector.has_value();
     m_mapped = false;
-    m_layoutFloated = false;
+    m_floatedByStackingLayout = false;
     if (m_workspace != nullptr) {
       m_workspace->syncFloatingStack(this);
     }
@@ -727,6 +754,7 @@ namespace umbriel {
     m_initialTitleRulesSettled = false;
     m_initialContentTypeRulesSettled = false;
     m_initialRules = {};
+    m_openingFloatingRuleSize = {};
     m_initialRuleHistory.clear();
     m_initialRuleState = {};
     m_initialRulesAppId.reset();
@@ -822,6 +850,7 @@ namespace umbriel {
     }
     syncXwaylandShape();
     if (openingConfigurePending() || reconfigureOpeningState) {
+      m_openingFloatingRuleSize = {};
       // Resolve window rules early to influence initial tiled/float decision and size.
       WindowRuleState openingState = ruleState();
       openingState.focused = false;
@@ -861,7 +890,7 @@ namespace umbriel {
       }
 
       const bool layoutFloats =
-          (target != nullptr ? target->layoutMode() : resolveGlobalLayout(config()).mode) == LayoutMode::Floating;
+          (target != nullptr ? target->layoutMode() : resolveGlobalLayout(config()).mode) == LayoutMode::Stacking;
       wantTiled = wantTiled && !layoutFloats;
 
       // A window that opens as the only tiled one on its workspace is configured in its `match.is_alone` state right
@@ -994,19 +1023,8 @@ namespace umbriel {
           setMaximizedState(true);
         } else {
           const wlr_box usable = openingUsableArea(targetOutput);
-          int requestedWidth = 0;
-          int requestedHeight = 0;
-          if (rule.defaultFloatingWidthPx) {
-            requestedWidth = clampWidth(*rule.defaultFloatingWidthPx, hints);
-          } else if (rule.defaultFloatingWidth && usable.width > 0) {
-            requestedWidth = clampWidth(floatingFractionSize(*rule.defaultFloatingWidth, usable.width), hints);
-          }
-          if (rule.defaultFloatingHeightPx) {
-            requestedHeight = clampHeight(*rule.defaultFloatingHeightPx, hints);
-          } else if (rule.defaultFloatingHeight && usable.height > 0) {
-            requestedHeight = clampHeight(floatingFractionSize(*rule.defaultFloatingHeight, usable.height), hints);
-          }
-          requestFloatingSize(requestedWidth, requestedHeight);
+          m_openingFloatingRuleSize = floatingRuleSize(rule, hints, usable);
+          requestFloatingSize(m_openingFloatingRuleSize[0], m_openingFloatingRuleSize[1]);
         }
 
         // Keep the configured unit until the window first enters the scrolling layout.

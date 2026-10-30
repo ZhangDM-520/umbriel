@@ -13,6 +13,8 @@
 // Usage: fractional-client [title [default_width default_height [margin]]].
 // UNMAPPED_SUBSURFACE adds an unbuffered child at (-200, -200), as Firefox does.
 // HOLD_SIZE keeps the default dimensions while acknowledging configures, exposing compositor-only resize scaling.
+// TITLE_AFTER_CONFIGURE sets the opening title after the first configure and before committing the first buffer.
+// RESIZE_BEFORE_MAP uses the default dimensions for that first buffer, then follows later configures normally.
 
 #include "fractional-scale-v1-client-protocol.h"
 #include "server-decoration-client-protocol.h"
@@ -174,6 +176,17 @@ namespace {
   void xdgSurfaceConfigure(void* data, xdg_surface* xdgSurface, uint32_t serial) {
     auto& state = *static_cast<State*>(data);
     xdg_surface_ack_configure(xdgSurface, serial);
+    if (!state.configured) {
+      if (const char* title = std::getenv("TITLE_AFTER_CONFIGURE")) {
+        xdg_toplevel_set_title(state.toplevel, title);
+        std::println("title-after-configure {}", title);
+        std::fflush(stdout);
+      }
+      if (std::getenv("RESIZE_BEFORE_MAP") != nullptr) {
+        state.logicalWidth = state.defaultWidth;
+        state.logicalHeight = state.defaultHeight;
+      }
+    }
     state.configured = true;
     if (!present(state)) {
       std::println(stderr, "fractional-client: could not present {}x{}", state.logicalWidth, state.logicalHeight);

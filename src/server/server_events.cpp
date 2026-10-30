@@ -2595,9 +2595,13 @@ namespace umbriel {
   void Server::remapTouches() {
     const Config::Input::Touch& cfg = config().input.touch;
     for (const auto& touch : m_touchDevices) {
-      Output* target = !cfg.mapToOutput.empty()
-          ? outputFromName(cfg.mapToOutput)
-          : defaultTouchOutput(outputs(), wlr_touch_from_input_device(touch->device)->output_name);
+      // wlroots leaves output_name unset for libinput devices; fall back to libinput's WL_OUTPUT udev property.
+      const char* reported = wlr_touch_from_input_device(touch->device)->output_name;
+      if (reported == nullptr && wlr_input_device_is_libinput(touch->device)) {
+        reported = libinput_device_get_output_name(wlr_libinput_get_device_handle(touch->device));
+      }
+      Output* target =
+          !cfg.mapToOutput.empty() ? outputFromName(cfg.mapToOutput) : defaultTouchOutput(outputs(), reported);
       wlr_cursor_map_input_to_output(m_cursor->wlr(), touch->device, target != nullptr ? target->wlr() : nullptr);
     }
   }
@@ -2827,6 +2831,8 @@ namespace umbriel {
             .workspaceNamed = workspace->named(),
             .configGeneration = configStore().generation(),
             .layoutModeOverride = workspace->layoutModeOverride(),
+            .transferredLayout =
+                workspace->transferred() ? std::make_optional(workspace->layoutConfig()) : std::nullopt,
         });
       }
       const wlr_box outputBox = output->layoutBox();
@@ -3205,6 +3211,8 @@ namespace umbriel {
         refugeHold = workspace->reserveForLaunch();
         targetGroup = workspace->group();
         target = targetGroup->output();
+      } else if (groupHome.workspaceOrigin && groupHome.workspaceOrigin->transferredLayout) {
+        workspace = targetGroup->restoreTransferredWorkspace(*groupHome.workspaceOrigin);
       } else if (groupHome.workspaceNamed) {
         workspace = targetGroup->workspaceNamed(groupHome.workspaceName);
       } else {
@@ -4217,20 +4225,28 @@ namespace umbriel {
     auto* request = static_cast<wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request*>(data);
 
     if (request->toplevel_handle == nullptr || request->toplevel_handle->data == nullptr) {
+      wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(request, nullptr);
       return;
     }
     auto* view = static_cast<View*>(request->toplevel_handle->data);
+
+    if (view->captureBlocked()) {
+      wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(request, nullptr);
+      return;
+    }
 
     // Reuse a cached capture source when one already exists for this view.
     if (view->m_captureSource == nullptr) {
       wlr_scene_tree* captureTree = view->captureTree();
       if (captureTree == nullptr) {
+        wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(request, nullptr);
         return;
       }
       view->m_captureSource = wlr_ext_image_capture_source_v1_create_with_scene_node(
           &captureTree->node, wl_display_get_event_loop(self->m_display), self->m_allocator, self->m_renderer
       );
       if (view->m_captureSource == nullptr) {
+        wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(request, nullptr);
         return;
       }
       view->m_captureSourceDestroy.notify = View::onCaptureSourceDestroy;

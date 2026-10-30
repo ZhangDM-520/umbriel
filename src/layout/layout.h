@@ -22,7 +22,7 @@ namespace umbriel {
     Scrolling,
     Dwindle,
     Master,
-    Floating,
+    Stacking,
   };
 
   enum class ScrollingDirection {
