@@ -2470,9 +2470,9 @@ namespace umbriel {
     // Keyboard focus is an escape from rule confinement. While the pointer remains inside that window, an
     // invalidated hover must not immediately focus it again. A real re-entry (or a click) can still focus it.
     const bool entered = view != oldView || (refocus && !hoveredAncestor && !ruleConstraintApplies(*view));
-    // Workspace focus is remembered independently from the seat. A pinned window from another workspace can own the
-    // seat while this view remains its active workspace's remembered focus, so only seat-global activation of the
-    // window that would take the keyboard (a dialog attached to this one) makes this handoff redundant.
+    // Workspace focus is remembered independently from the seat. A pinned window that kept focus across a workspace
+    // switch can own the seat while this view remains its workspace's remembered focus, so only seat-global activation
+    // of the window that would take the keyboard (a dialog attached to this one) makes this handoff redundant.
     const bool alreadyFocused = view->placementRoot()->inputDelegate()->activated();
     if (entered && !alreadyFocused) {
       m_server->focusView(view, FocusReason::PointerHover);

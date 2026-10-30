@@ -131,8 +131,14 @@ namespace umbriel {
     void syncFloatingStack(View* view);
     void restackFloatingViews();
     void raiseFloatingLayer();
-    void addView(View* view, bool attachToLayout = true, LayoutAttachOrigin origin = LayoutAttachOrigin::ExistingView);
+    void addView(
+        View* view, bool attachToLayout = true, LayoutAttachOrigin origin = LayoutAttachOrigin::ExistingView,
+        bool reconcile = true
+    );
     View* removeView(View* view, bool reconcile = true);
+    // Take over the pinned members of another workspace on this output without reconciling the group, so it is safe
+    // during activation and inventory reconciliation.
+    void adoptPinnedViews(Workspace& from);
     void layoutAttach(
         View* view, std::optional<double> initialExtent = std::nullopt,
         std::optional<int> initialExtentPx = std::nullopt, LayoutAttachOrigin origin = LayoutAttachOrigin::ExistingView
@@ -252,6 +258,9 @@ namespace umbriel {
     // Floating frames from back to front, matching their workspace stacking order.
     [[nodiscard]] const std::vector<View*>& floatingStack() const noexcept { return m_floatingStack; }
     [[nodiscard]] bool hasViews() const { return !m_views.empty(); }
+    // Whether the workspace holds a window of its own. Pinned windows belong to the output and only ride along with
+    // its active workspace, so they never make a workspace occupied.
+    [[nodiscard]] bool occupied() const;
     // Minimize every floating window here that can be, remembering the focus. When none is left to hide, restore
     // every minimized window here, however it was minimized, and return focus to where it was.
     void toggleShowDesktop();

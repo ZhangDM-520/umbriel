@@ -287,6 +287,12 @@ namespace umbriel {
     applyVisibility();
     syncCloseSnapshots();
     if (active) {
+      // Pinned windows belong to their output, so they always follow its active workspace.
+      for (size_t index = 0; index < m_group->workspaceCount(); ++index) {
+        if (Workspace* sibling = m_group->workspaceAt(index); sibling != nullptr && sibling != this) {
+          adoptPinnedViews(*sibling);
+        }
+      }
       markArrange(false);
       m_group->output()->updateVrr();
       m_group->output()->updateHdr();
@@ -388,7 +394,7 @@ namespace umbriel {
     raiseFloatingLayer();
   }
 
-  void Workspace::addView(View* view, bool attachToLayout, LayoutAttachOrigin origin) {
+  void Workspace::addView(View* view, bool attachToLayout, LayoutAttachOrigin origin, bool reconcile) {
     if (view == nullptr || std::ranges::find(m_views, view) != m_views.end()) {
       return;
     }
@@ -418,7 +424,29 @@ namespace umbriel {
     }
     // A float joins no layout, so nothing below would mark the workspace for a pass; occupancy questions need one.
     markArrange();
-    m_group->reconcileDynamic();
+    if (reconcile) {
+      m_group->reconcileDynamic();
+    }
+  }
+
+  bool Workspace::occupied() const {
+    return std::ranges::any_of(m_views, [](const View* view) { return !view->pinned(); });
+  }
+
+  void Workspace::adoptPinnedViews(Workspace& from) {
+    if (&from == this) {
+      return;
+    }
+    std::vector<View*> pinned;
+    std::ranges::copy_if(from.m_views, std::back_inserter(pinned), [](const View* view) { return view->pinned(); });
+    for (View* view : pinned) {
+      from.removeView(view, false);
+      view->m_workspace = this;
+      addView(view, false, LayoutAttachOrigin::ExistingView, false);
+    }
+    if (!pinned.empty()) {
+      m_group->server()->scheduleIpcWindowsEvent();
+    }
   }
 
   View* Workspace::removeView(View* view, bool reconcile) {
@@ -2720,12 +2748,12 @@ namespace umbriel {
       if (direction > 0) {
         const bool targetIsTrailingEmpty = static_cast<size_t>(target) == m_workspaces.size() - 1
             && !m_workspaces[static_cast<size_t>(target)]->named()
-            && !m_workspaces[static_cast<size_t>(target)]->hasViews();
+            && !m_workspaces[static_cast<size_t>(target)]->occupied();
         if (targetIsTrailingEmpty) {
           return false;
         }
       } else if (config().workspaces.emptyAbove) {
-        const bool targetIsLeadingEmpty = target == 0 && !m_workspaces[0]->named() && !m_workspaces[0]->hasViews();
+        const bool targetIsLeadingEmpty = target == 0 && !m_workspaces[0]->named() && !m_workspaces[0]->occupied();
         if (targetIsLeadingEmpty) {
           return false;
         }
@@ -2797,11 +2825,11 @@ namespace umbriel {
         if (config().workspaces.emptyAbove
             && !m_workspaces.empty()
             && !m_workspaces.front()->named()
-            && !m_workspaces.front()->hasViews()) {
+            && !m_workspaces.front()->occupied()) {
           leadingSentinel = m_workspaces.front().get();
         }
         Workspace* trailingSentinel = nullptr;
-        if (!m_workspaces.empty() && !m_workspaces.back()->named() && !m_workspaces.back()->hasViews()) {
+        if (!m_workspaces.empty() && !m_workspaces.back()->named() && !m_workspaces.back()->occupied()) {
           trailingSentinel = m_workspaces.back().get();
         }
         auto reusable = std::ranges::find_if(m_workspaces, [&](const auto& workspace) {
@@ -2809,7 +2837,7 @@ namespace umbriel {
               && workspace.get() != trailingSentinel
               && !workspace->displacedWorkspace()
               && !workspace->named()
-              && !workspace->hasViews()
+              && !workspace->occupied()
               && !workspace->launchReserved();
         });
         if (reusable == m_workspaces.end()) {
@@ -2829,7 +2857,7 @@ namespace umbriel {
       if (config().workspaces.emptyAbove
           && !m_workspaces.empty()
           && !m_workspaces.front()->named()
-          && !m_workspaces.front()->hasViews()) {
+          && !m_workspaces.front()->occupied()) {
         index = 1;
       }
       ResolvedLayoutConfig layout = resolveWorkspaceLayout(config(), m_output->identity(), entry, index);
@@ -3080,14 +3108,14 @@ namespace umbriel {
     const bool emptyAbove = config().workspaces.emptyAbove;
     const size_t minimum = resolveDynamicWorkspaceMinimum(config(), identity);
     Workspace* frontKeeper = nullptr;
-    if (emptyAbove && !m_workspaces.empty() && !m_workspaces.front()->named() && !m_workspaces.front()->hasViews()) {
+    if (emptyAbove && !m_workspaces.empty() && !m_workspaces.front()->named() && !m_workspaces.front()->occupied()) {
       frontKeeper = m_workspaces.front().get();
     }
 
     // The optional leading empty and the trailing empty are distinct inventory entries, including before the first
     // view maps. A leading empty therefore cannot also serve as the trailing keeper.
     Workspace* activeKeeper = nullptr;
-    if (m_active != nullptr && !m_active->named() && !m_active->hasViews()) {
+    if (m_active != nullptr && !m_active->named() && !m_active->occupied()) {
       activeKeeper = m_active;
     }
     Workspace* backKeeper = nullptr;
@@ -3096,7 +3124,7 @@ namespace umbriel {
           std::ranges::find_if(m_workspaces, [&](const auto& workspace) { return workspace.get() == activeKeeper; });
       const bool substantiveWorkspaceFollows = active != m_workspaces.end()
           && std::ranges::any_of(active + 1, m_workspaces.end(),
-                                 [](const auto& workspace) { return workspace->named() || workspace->hasViews(); });
+                                 [](const auto& workspace) { return workspace->named() || workspace->occupied(); });
       if (!substantiveWorkspaceFollows) {
         backKeeper = activeKeeper;
       }
@@ -3104,7 +3132,7 @@ namespace umbriel {
     if (backKeeper == nullptr
         && !m_workspaces.empty()
         && !m_workspaces.back()->named()
-        && !m_workspaces.back()->hasViews()
+        && !m_workspaces.back()->occupied()
         && m_workspaces.back().get() != frontKeeper) {
       backKeeper = m_workspaces.back().get();
     }
@@ -3136,7 +3164,7 @@ namespace umbriel {
     }
     if ((m_workspaces.empty()
          || m_workspaces.back()->named()
-         || m_workspaces.back()->hasViews()
+         || m_workspaces.back()->occupied()
          || m_workspaces.back().get() == frontKeeper)
         && m_workspaces.size() < kMaxWorkspaces) {
       appendDynamicWorkspace();
@@ -3537,7 +3565,7 @@ namespace umbriel {
       return nullptr;
     }
     const auto empty = std::ranges::find_if(m_workspaces.rbegin(), m_workspaces.rend(), [](const auto& workspace) {
-      return !workspace->displacedWorkspace() && !workspace->named() && !workspace->hasViews();
+      return !workspace->displacedWorkspace() && !workspace->named() && !workspace->occupied();
     });
     if (empty != m_workspaces.rend()) {
       kLog.debug("using empty dynamic workspace for create request on {}", m_output->wlr()->name);
@@ -3593,14 +3621,8 @@ namespace umbriel {
       m_previous = nullptr;
     }
     m_active->setActive(true);
-    // Pinned windows belong to their output: they stay with the source's active workspace.
-    std::vector<View*> pinned;
-    std::ranges::copy_if(workspace->allViews(), std::back_inserter(pinned), [](const View* view) {
-      return view->pinned();
-    });
-    for (View* view : pinned) {
-      view->setWorkspace(m_active);
-    }
+    // The moving workspace has already left the inventory, so activation did not see its pinned windows.
+    m_active->adoptPinnedViews(*workspace);
 
     workspace->transferTo(destination);
     destination.m_workspaces.insert(

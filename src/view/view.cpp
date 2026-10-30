@@ -384,6 +384,13 @@ namespace umbriel {
         && m_server->scratchpadManager()->contains(this)) {
       return;
     }
+    // A pinned window belongs to its output and always joins that output's active workspace. Reconciliation may still
+    // name a workspace it is deactivating as the group's active one; only a workspace that is really active qualifies.
+    if (m_pinned && workspace != nullptr && !workspace->active() && workspace->group() != nullptr) {
+      if (Workspace* active = workspace->group()->active(); active != nullptr && active->active()) {
+        workspace = active;
+      }
+    }
     if (!m_displacedHome && !m_pinned && workspace != nullptr && workspace->displacedWorkspace()) {
       const auto& home = workspace->displacedWorkspace();
       m_displacedHome.emplace();

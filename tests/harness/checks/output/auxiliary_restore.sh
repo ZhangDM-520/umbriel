@@ -347,6 +347,8 @@ done
 # A pinned view remains pinned across recovery. One toggle after return must
 # unpin and retile it, which distinguishes a retained pin from an ordinary
 # floating view without adding a pin flag to the public windows response.
+# Pinned views belong to their output, so they return to its active workspace
+# and retile there.
 for title in "${probes[@]}"; do
   focus_window "$title"
   "$UMBRIEL" msg window-toggle-pinned > /dev/null
@@ -359,12 +361,20 @@ for title in "${probes[@]}"; do
   wait_for_field "$title" floating true
 done
 recreate_home
-wait_for_workspace_homes "${titles[@]}"
+wait_for_workspace_homes "${anchors[@]}"
+active=$("$UMBRIEL" workspaces --json | jq -r '.[] | select(.output == "HEADLESS-1" and .active) | .name')
+for title in "${probes[@]}"; do
+  wait_for_home "$title" "HEADLESS-1/$active"
+done
 wait_for_snapshot all "$pinned_before"
 for title in "${probes[@]}"; do
   focus_window "$title"
   "$UMBRIEL" msg window-toggle-pinned > /dev/null
   wait_for_field "$title" floating false
+  wait_for_home "$title" "HEADLESS-1/$active"
+done
+for title in "${probes[@]}"; do
+  move_to_workspace "$title" "${workspace_of[$title]}"
 done
 
 # Ordinary floating views stay workspace-owned while a separate scratchpad

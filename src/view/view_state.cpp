@@ -653,6 +653,12 @@ namespace umbriel {
         setFloating(true, false);
       }
       applyPinnedState();
+      // Pinning a window on a hidden workspace hands it to the output's active workspace.
+      if (m_workspace != nullptr && !m_workspace->active() && m_workspace->group() != nullptr) {
+        if (Workspace* active = m_workspace->group()->active(); active != nullptr && active->active()) {
+          setWorkspace(active);
+        }
+      }
       if (focus) {
         m_server->focusView(this);
       }

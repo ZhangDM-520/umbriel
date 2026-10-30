@@ -75,7 +75,8 @@ action window-toggle-maximize
 await_state windows ".[] | select(.id == \"$other\") | (.maximized | not) and (.maximized_to_edges | not)" \
   "restoring the window did not reach the listing"
 
-# A pinned window stays visible on another workspace; the others are hidden with their workspace.
+# A pinned window stays visible on another workspace; the others are hidden with their workspace. The pinned window
+# moves to the active workspace without making it occupied.
 action window-focus "$child"
 action window-toggle-pinned
 await_state windows ".[] | select(.id == \"$child\") | .pinned" "pinning did not reach the listing"
@@ -84,8 +85,11 @@ await_state windows "
   (.[] | select(.id == \"$child\") | .visible)
   and all(.[] | select(.id != \"$child\"); .visible | not)
 " "a workspace switch did not update visibility"
-await_state workspaces '.[] | select(.focused) | .index == 2 and .focused_window == ""' \
-  "the empty workspace names a focused window"
+await_state workspaces ".[] | select(.focused) | .index == 2 and (.occupied | not) and .window_count == 0" \
+  "the pinned window made the active workspace occupied"
+await_state windows ".[] | select(.id == \"$child\") | .workspace == \"$(
+  "$UMBRIEL" workspaces --json | jq -r '.[] | select(.focused) | .id'
+)\"" "the pinned window did not follow the active workspace"
 action workspace-switch 1
 await_state windows 'all(.[]; .visible)' "returning to the workspace did not show its windows"
 
