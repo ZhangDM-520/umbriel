@@ -55,7 +55,7 @@ await_popup_configure() {
 }
 
 spawn_popup_client workspace
-"$UMBRIEL" msg "window-move-to-workspace-silent:2" > /dev/null
+"$UMBRIEL" msg window-move-to-workspace-silent 2 > /dev/null
 await_hidden "on a hidden workspace"
 await_popup_configure workspace
 
