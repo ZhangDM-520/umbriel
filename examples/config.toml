@@ -91,6 +91,21 @@ radius = 3
 # button_position = "right" # or "left"
 # buttons = ["minimize", "maximize", "close"] # From the title outward; leave one out to hide it.
 # button_corner_radius = -1 # Follow the window's corner_radius; 0 makes square buttons.
+# button_icons = true # Show X, square, and underscore symbols.
+# button_icons_on_hover = false # Show each symbol only while its button is hovered or pressed.
+# button_background = true # Show colored backgrounds behind the symbols.
+
+# Optional button palette. Glyph colors also apply when button backgrounds are off.
+# [colors.title_bar]
+# close = "#FF6B6BFF"
+# close_glyph = "#141419FF"
+# close_glyph_hover = "#141419FF"
+# maximize = "#7AA3FFFF"
+# maximize_glyph = "#141419FF"
+# maximize_glyph_hover = "#141419FF"
+# minimize = "#FFD166FF"
+# minimize_glyph = "#141419FF"
+# minimize_glyph_hover = "#141419FF"
 
 # Choose the background color shown if the lock screen takes too long to appear.
 # [colors]

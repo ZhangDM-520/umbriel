@@ -4683,13 +4683,22 @@ height = 42
 font = "sans 12"
 button_position = "left"
 button_corner_radius = 4
+button_icons = false
+button_icons_on_hover = true
+button_background = false
 [colors.title_bar]
 background = "#FF0000FF"
 background_unfocused = "#00FF00FF"
 text = "#0000FFFF"
 text_unfocused = "#FF00FFFF"
 close = "#FFFF00FF"
+close_glyph = "#FF000080"
+close_glyph_hover = "#00FF00FF"
 maximize = "#00FFFFFF"
+maximize_glyph = "#0000FFFF"
+maximize_glyph_hover = "#FF00FFFF"
+minimize_glyph = "#FFFF00FF"
+minimize_glyph_hover = "#00FFFFFF"
 )");
   auto& store = umbriel::configStore();
   store.setRootPath(file.path(), true);
@@ -4701,6 +4710,9 @@ maximize = "#00FFFFFF"
   CHECK_EQ(bar.font, std::string("sans 12"));
   CHECK_EQ(bar.buttonPosition, umbriel::TitleBarButtonSide::Left);
   CHECK_EQ(bar.buttonCornerRadius, 4);
+  CHECK_EQ(bar.buttonIcons, false);
+  CHECK_EQ(bar.buttonIconsOnHover, true);
+  CHECK_EQ(bar.buttonBackground, false);
   const auto& colors = store.config().colors.titleBar;
   CHECK_EQ(colors.background[0], 1.0F);
   CHECK_EQ(colors.backgroundUnfocused[1], 1.0F);
@@ -4708,6 +4720,13 @@ maximize = "#00FFFFFF"
   CHECK_EQ(colors.textUnfocused[0], 1.0F);
   CHECK_EQ(colors.close[1], 1.0F);
   CHECK_EQ(colors.maximize[2], 1.0F);
+  CHECK_EQ(colors.closeGlyph[0], 1.0F);
+  CHECK_EQ(colors.closeGlyph[3], 128.0F / 255.0F);
+  CHECK_EQ(colors.closeGlyphHover[1], 1.0F);
+  CHECK_EQ(colors.maximizeGlyph[2], 1.0F);
+  CHECK_EQ(colors.maximizeGlyphHover[0], 1.0F);
+  CHECK_EQ(colors.minimizeGlyph[0], 1.0F);
+  CHECK_EQ(colors.minimizeGlyphHover[2], 1.0F);
 }
 
 UMBRIEL_TEST(titleBarInvalidValuesAreClaimedAndDiagnosed) {
@@ -4719,6 +4738,16 @@ height = 500
 font = 123
 button_position = "middle"
 button_corner_radius = 500
+button_icons = "yes"
+button_icons_on_hover = "yes"
+button_background = 1
+[colors.title_bar]
+close_glyph = true
+close_glyph_hover = 1
+maximize_glyph = "invalid"
+maximize_glyph_hover = false
+minimize_glyph = []
+minimize_glyph_hover = {}
 )");
   auto& store = umbriel::configStore();
   store.setRootPath(file.path(), true);
@@ -4727,10 +4756,21 @@ button_corner_radius = 500
   CHECK_EQ(store.config().appearance.titleBar.height, 128);
   CHECK_EQ(store.config().appearance.titleBar.buttonPosition, umbriel::TitleBarButtonSide::Right);
   CHECK_EQ(store.config().appearance.titleBar.buttonCornerRadius, 100);
+  CHECK_EQ(store.config().appearance.titleBar.buttonIcons, true);
+  CHECK_EQ(store.config().appearance.titleBar.buttonIconsOnHover, false);
+  CHECK_EQ(store.config().appearance.titleBar.buttonBackground, true);
   CHECK(containsDiagnostic(store, "appearance.title_bar.height = 500 out of range, clamped to 128"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_position"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_corner_radius"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.button_icons"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.button_icons_on_hover"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.button_background"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.mode"));
+  for (const auto* key :
+       {"close_glyph", "close_glyph_hover", "maximize_glyph", "maximize_glyph_hover", "minimize_glyph",
+        "minimize_glyph_hover"}) {
+    CHECK(containsDiagnostic(store, std::string("colors.title_bar.") + key));
+  }
   CHECK(containsDiagnostic(store, "expected string"));
   CHECK(!containsDiagnostic(store, "unknown key"));
 }

@@ -845,6 +845,8 @@ core_sources = files(
   'src/scene/quit_confirm.cpp',
   'src/scene/cheatsheet.cpp',
   'src/scene/text_buffer.cpp',
+  'src/scene/cairo_buffer.cpp',
+  'src/scene/title_bar_icon.cpp',
   'src/scene/tab_bar.cpp',
   'src/scene/ssd_frame.cpp',
   'src/scene/tab_bar_style.cpp',

@@ -665,8 +665,14 @@ namespace umbriel {
         std::array<float, 4> text{0.9098039F, 0.9098039F, 0.9176471F, 1.0F};
         std::array<float, 4> textUnfocused{0.5411765F, 0.5411765F, 0.5725490F, 1.0F};
         std::array<float, 4> close{1.0F, 0.4196078F, 0.4196078F, 1.0F};
+        std::array<float, 4> closeGlyph{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
+        std::array<float, 4> closeGlyphHover{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
         std::array<float, 4> maximize{0.4784314F, 0.6392157F, 1.0F, 1.0F};
+        std::array<float, 4> maximizeGlyph{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
+        std::array<float, 4> maximizeGlyphHover{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
         std::array<float, 4> minimize{1.0F, 0.8196078F, 0.4F, 1.0F};
+        std::array<float, 4> minimizeGlyph{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
+        std::array<float, 4> minimizeGlyphHover{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
         bool operator==(const TitleBar&) const = default;
       } titleBar;
       std::array<float, 4> background{0.0784314F, 0.0784314F, 0.0980392F, 1.0F};
@@ -725,6 +731,9 @@ namespace umbriel {
         std::string font = "sans 10";
         TitleBarButtonSide buttonPosition = TitleBarButtonSide::Right;
         int buttonCornerRadius = -1;
+        bool buttonIcons = true;
+        bool buttonIconsOnHover = false;
+        bool buttonBackground = true;
         // Read from the title outward: the last one sits at the bar's edge.
         std::vector<TitleBarButton> buttons{TitleBarButton::Minimize, TitleBarButton::Maximize, TitleBarButton::Close};
         bool operator==(const TitleBar&) const = default;

@@ -55,6 +55,7 @@ unit_tests = [
   ['shortcut-labels', ['unit/shortcut_labels.cpp'], []],
   ['border-ring', ['unit/border_ring.cpp'], []],
   ['ssd-frame-geometry', ['unit/ssd_frame_geometry.cpp'], []],
+  ['title-bar-icon', ['unit/title_bar_icon.cpp'], [umbriel_core_dep]],
   ['floating', ['unit/floating.cpp'], []],
   ['window-region', ['unit/window_region.cpp'], []],
   ['drag-physics', ['unit/drag_physics.cpp'], []],

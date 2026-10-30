@@ -32,8 +32,14 @@ namespace umbriel {
           color("text", &C::TitleBar::text),
           color("text_unfocused", &C::TitleBar::textUnfocused),
           color("close", &C::TitleBar::close),
+          color("close_glyph", &C::TitleBar::closeGlyph),
+          color("close_glyph_hover", &C::TitleBar::closeGlyphHover),
           color("maximize", &C::TitleBar::maximize),
+          color("maximize_glyph", &C::TitleBar::maximizeGlyph),
+          color("maximize_glyph_hover", &C::TitleBar::maximizeGlyphHover),
           color("minimize", &C::TitleBar::minimize),
+          color("minimize_glyph", &C::TitleBar::minimizeGlyph),
+          color("minimize_glyph_hover", &C::TitleBar::minimizeGlyphHover),
       };
       static const registry::Fields<C::Border> border{
           color("focused", &C::Border::focused),
@@ -89,6 +95,9 @@ namespace umbriel {
           ),
           integer("height", 16, 128, &A::TitleBar::height),
           integer("button_corner_radius", -1, 100, &A::TitleBar::buttonCornerRadius),
+          boolean("button_icons", &A::TitleBar::buttonIcons),
+          boolean("button_icons_on_hover", &A::TitleBar::buttonIconsOnHover),
+          boolean("button_background", &A::TitleBar::buttonBackground),
           registry::text("font", &A::TitleBar::font),
           registry::choice(
               "button_position", &A::TitleBar::buttonPosition,
