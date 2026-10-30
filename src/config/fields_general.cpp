@@ -95,8 +95,14 @@ namespace umbriel {
           ),
           integer("height", 16, 128, &A::TitleBar::height),
           integer("button_corner_radius", -1, 100, &A::TitleBar::buttonCornerRadius),
-          boolean("button_icons", &A::TitleBar::buttonIcons),
-          boolean("button_icons_on_hover", &A::TitleBar::buttonIconsOnHover),
+          registry::choice(
+              "button_glyph", &A::TitleBar::buttonGlyph,
+              {
+                  {.name = "always", .value = TitleBarButtonGlyph::Always},
+                  {.name = "hover", .value = TitleBarButtonGlyph::Hover},
+                  {.name = "never", .value = TitleBarButtonGlyph::Never},
+              }
+          ),
           boolean("button_background", &A::TitleBar::buttonBackground),
           registry::text("font", &A::TitleBar::font),
           registry::choice(

@@ -16,7 +16,7 @@ enabled = false
 mode = "forced"
 height = 40
 button_position = "right"
-button_icons = true
+button_glyph = "always"
 button_background = true
 [colors.title_bar]
 background = "#000000FF"
@@ -51,7 +51,7 @@ capture() {
   grim -o HEADLESS-1 "$image"
 }
 flags() {
-  sed -i "s/^button_icons = .*/button_icons = $1/; s/^button_background = .*/button_background = $2/" "$UMBRIEL_CONFIG"
+  sed -i "s/^button_glyph = .*/button_glyph = \"$1\"/; s/^button_background = .*/button_background = $2/" "$UMBRIEL_CONFIG"
   "$UMBRIEL" msg config-reload > /dev/null
   capture
 }
@@ -66,7 +66,7 @@ for scale in 1 1.25 2; do
   region=$(awk -v s="$scale" 'BEGIN { printf "%dx%d+%d+%d", 240*s, 40*s, 100*s, 60*s }')
   for side in left right; do
     sed -i "s/^button_position = .*/button_position = \"$side\"/" "$UMBRIEL_CONFIG"
-    flags true true
+    flags always true
     (( $(white_pixels) > 10 )) || { echo "scale=$scale side=$side: symbols missing on colored buttons"; exit 1; }
     # Each control must carry its own symbol, including the floating window's minimize control.
     for index in 0 1 2; do
@@ -79,15 +79,15 @@ for scale in 1 1.25 2; do
       count=$("$UMBRIEL_PIXEL_PROBE" "$image" count 'r > 0.4 && g > 0.4' "$button_region")
       (( count > 2 )) || { echo "scale=$scale side=$side: button $index lost its symbol"; exit 1; }
     done
-    flags false true
+    flags never true
     (( $(white_pixels) == 0 )) || { echo "symbols remained after disabling them"; exit 1; }
     background_area=$(blue_pixels)
     (( background_area > 100 )) || { echo "disabling symbols removed the button backgrounds"; exit 1; }
-    flags true false
+    flags always false
     symbol_area=$(white_pixels)
     (( $(blue_pixels) == 0 && symbol_area > 5 && symbol_area < background_area / 2 )) \
       || { echo "bare symbols did not retain their configured glyph colors"; exit 1; }
-    flags false false
+    flags never false
     (( $(blue_pixels) == 0 && $(white_pixels) == 0 )) || { echo "hidden controls still painted"; exit 1; }
   done
 done
@@ -98,7 +98,7 @@ done
 [[ -n $(title_bar_window ssd-icons) ]] || { echo "hidden buttons retained an invisible close target"; exit 1; }
 
 # Symbols alone remain clickable and are copied into the window's close snapshot.
-flags true false
+flags always false
 sed -i '/^\[animation\]$/ { n; s/enabled = false/enabled = true/; }' "$UMBRIEL_CONFIG"
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
 [animation.windows_out]

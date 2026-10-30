@@ -34,6 +34,8 @@ namespace umbriel {
 
   enum class TitleBarMode : uint8_t { On, Negotiated, Forced, Off };
 
+  enum class TitleBarButtonGlyph : uint8_t { Always, Hover, Never };
+
   enum class ModifierKey {
     Super,
     Alt,
@@ -731,8 +733,7 @@ namespace umbriel {
         std::string font = "sans 10";
         TitleBarButtonSide buttonPosition = TitleBarButtonSide::Right;
         int buttonCornerRadius = -1;
-        bool buttonIcons = true;
-        bool buttonIconsOnHover = false;
+        TitleBarButtonGlyph buttonGlyph = TitleBarButtonGlyph::Hover;
         bool buttonBackground = true;
         // Read from the title outward: the last one sits at the bar's edge.
         std::vector<TitleBarButton> buttons{TitleBarButton::Minimize, TitleBarButton::Maximize, TitleBarButton::Close};

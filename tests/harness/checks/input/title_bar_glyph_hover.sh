@@ -16,8 +16,7 @@ enabled = false
 mode = "forced"
 height = 40
 button_position = "right"
-button_icons = true
-button_icons_on_hover = true
+button_glyph = "hover"
 button_background = true
 [colors.title_bar]
 background = "#000000FF"
@@ -64,10 +63,10 @@ assert_glyphs() {
     expected=${idle[index]}
     if ((index == active)); then expected=${hover[index]}; fi
     count=$("$UMBRIEL_PIXEL_PROBE" "$image" count "$expected" "$region")
-    if [[ $on_hover == true ]] && ((index != active)); then
+    if [[ $glyph == hover ]] && ((index != active)); then
       ((count == 0)) || { echo "button $index: glyph visible away from hover"; exit 1; }
     else
-      ((count > 2)) || { echo "button $index: wrong glyph color with hover=$active backgrounds=$background on_hover=$on_hover"; exit 1; }
+      ((count > 2)) || { echo "button $index: wrong glyph color with hover=$active backgrounds=$background glyph=$glyph"; exit 1; }
     fi
     other=${hover[index]}
     if ((index == active)); then other=${idle[index]}; fi
@@ -77,8 +76,8 @@ assert_glyphs() {
 }
 
 for background in true false; do
-  for on_hover in true false; do
-    sed -i "s/^button_background = .*/button_background = $background/; s/^button_icons_on_hover = .*/button_icons_on_hover = $on_hover/" "$UMBRIEL_CONFIG"
+  for glyph in hover always; do
+    sed -i "s/^button_background = .*/button_background = $background/; s/^button_glyph = .*/button_glyph = \"$glyph\"/" "$UMBRIEL_CONFIG"
     "$UMBRIEL" msg config-reload > /dev/null
     capture_at 0 0
     assert_glyphs -1
@@ -92,8 +91,8 @@ for background in true false; do
 done
 
 # A pressed close control uses its hover glyph; leaving it cancels the visual press before release.
-on_hover=true
-sed -i 's/^button_icons_on_hover = .*/button_icons_on_hover = true/' "$UMBRIEL_CONFIG"
+glyph=hover
+sed -i 's/^button_glyph = .*/button_glyph = "hover"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 capture_at 320 80
 pointer_hold "$output_w" "$output_h" press 272 -- move 220 80 mark cancelled hold release 272
@@ -109,7 +108,7 @@ capture_at 0 0
 assert_glyphs -1
 
 # The glyph's own alpha applies independently of the transparent background rectangle.
-sed -i 's/^close_glyph = .*/close_glyph = "#00FF0080"/; s/^close_glyph_hover = .*/close_glyph_hover = "#00FF0080"/; s/^button_icons_on_hover = .*/button_icons_on_hover = false/' "$UMBRIEL_CONFIG"
+sed -i 's/^close_glyph = .*/close_glyph = "#00FF0080"/; s/^close_glyph_hover = .*/close_glyph_hover = "#00FF0080"/; s/^button_glyph = .*/button_glyph = "always"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 capture_at 0 0
 read -r _ idle_green _ < <("$UMBRIEL_PIXEL_PROBE" "$image" max '25x25+387+87')
@@ -119,7 +118,7 @@ read -r red green blue < <("$UMBRIEL_PIXEL_PROBE" "$image" max '25x25+387+87')
   echo "glyph alpha changed or was lost: idle green=$idle_green, hovered=$red $green $blue"
   exit 1
 }
-sed -i 's/^button_icons = .*/button_icons = false/' "$UMBRIEL_CONFIG"
+sed -i 's/^button_glyph = .*/button_glyph = "never"/' "$UMBRIEL_CONFIG"
 "$UMBRIEL" msg config-reload > /dev/null
 capture_at 320 80
 count=$("$UMBRIEL_PIXEL_PROBE" "$image" count 'r > 0.1 || g > 0.1 || b > 0.1' '300x50+125+75')

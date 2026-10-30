@@ -4683,8 +4683,7 @@ height = 42
 font = "sans 12"
 button_position = "left"
 button_corner_radius = 4
-button_icons = false
-button_icons_on_hover = true
+button_glyph = "never"
 button_background = false
 [colors.title_bar]
 background = "#FF0000FF"
@@ -4710,8 +4709,7 @@ minimize_glyph_hover = "#00FFFFFF"
   CHECK_EQ(bar.font, std::string("sans 12"));
   CHECK_EQ(bar.buttonPosition, umbriel::TitleBarButtonSide::Left);
   CHECK_EQ(bar.buttonCornerRadius, 4);
-  CHECK_EQ(bar.buttonIcons, false);
-  CHECK_EQ(bar.buttonIconsOnHover, true);
+  CHECK_EQ(bar.buttonGlyph, umbriel::TitleBarButtonGlyph::Never);
   CHECK_EQ(bar.buttonBackground, false);
   const auto& colors = store.config().colors.titleBar;
   CHECK_EQ(colors.background[0], 1.0F);
@@ -4738,8 +4736,7 @@ height = 500
 font = 123
 button_position = "middle"
 button_corner_radius = 500
-button_icons = "yes"
-button_icons_on_hover = "yes"
+button_glyph = "sometimes"
 button_background = 1
 [colors.title_bar]
 close_glyph = true
@@ -4756,14 +4753,12 @@ minimize_glyph_hover = {}
   CHECK_EQ(store.config().appearance.titleBar.height, 128);
   CHECK_EQ(store.config().appearance.titleBar.buttonPosition, umbriel::TitleBarButtonSide::Right);
   CHECK_EQ(store.config().appearance.titleBar.buttonCornerRadius, 100);
-  CHECK_EQ(store.config().appearance.titleBar.buttonIcons, true);
-  CHECK_EQ(store.config().appearance.titleBar.buttonIconsOnHover, false);
+  CHECK_EQ(store.config().appearance.titleBar.buttonGlyph, umbriel::TitleBarButtonGlyph::Hover);
   CHECK_EQ(store.config().appearance.titleBar.buttonBackground, true);
   CHECK(containsDiagnostic(store, "appearance.title_bar.height = 500 out of range, clamped to 128"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_position"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_corner_radius"));
-  CHECK(containsDiagnostic(store, "appearance.title_bar.button_icons"));
-  CHECK(containsDiagnostic(store, "appearance.title_bar.button_icons_on_hover"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.button_glyph"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_background"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.mode"));
   for (const auto* key :

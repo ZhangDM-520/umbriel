@@ -153,8 +153,9 @@ namespace umbriel {
 
   std::span<const TitleBarButton> SsdFrame::visibleButtons() const {
     const auto& style = config().appearance.titleBar;
-    return style.buttonIcons || style.buttonBackground ? std::span<const TitleBarButton>(m_buttons)
-                                                       : std::span<const TitleBarButton>();
+    return style.buttonGlyph != TitleBarButtonGlyph::Never || style.buttonBackground
+        ? std::span<const TitleBarButton>(m_buttons)
+        : std::span<const TitleBarButton>();
   }
 
   void SsdFrame::updateButtonIcon(TitleBarButton button, const std::array<float, 4>& color, float alpha, bool visible) {
@@ -162,7 +163,7 @@ namespace umbriel {
     auto*& icon = m_icons[index];
     const std::array<wlr_scene_rect*, kTitleBarButtonCount> backgrounds{m_minimize, m_maximize, m_close};
     const auto* background = backgrounds[index];
-    if (!visible || !config().appearance.titleBar.buttonIcons || !background->node.enabled) {
+    if (!visible || !background->node.enabled) {
       if (icon != nullptr)
         wlr_scene_node_set_enabled(&icon->node, false);
       return;
@@ -222,9 +223,9 @@ namespace umbriel {
       premultiplied(color, value, backgrounds ? m_alpha * alpha : 0.0F);
       wlr_scene_rect_set_color(rect, color);
       const auto& glyphColor = enabled && (hovered || pressed) ? hoverGlyph : idleGlyph;
-      updateButtonIcon(
-          which, glyphColor, m_alpha * (enabled ? 1.0F : 0.35F), !style.buttonIconsOnHover || hovered || pressed
-      );
+      const bool glyphVisible = style.buttonGlyph == TitleBarButtonGlyph::Always
+          || (style.buttonGlyph == TitleBarButtonGlyph::Hover && (hovered || pressed));
+      updateButtonIcon(which, glyphColor, m_alpha * (enabled ? 1.0F : 0.35F), glyphVisible);
     };
     button(
         m_close, colors.close, colors.closeGlyph, colors.closeGlyphHover, SsdFramePart::Close, true,
