@@ -258,8 +258,8 @@ namespace umbriel {
     // Floating frames from back to front, matching their workspace stacking order.
     [[nodiscard]] const std::vector<View*>& floatingStack() const noexcept { return m_floatingStack; }
     [[nodiscard]] bool hasViews() const { return !m_views.empty(); }
-    // Whether the workspace holds a window of its own. Pinned windows belong to the output and only ride along with
-    // its active workspace, so they never make a workspace occupied.
+    // Whether the workspace holds a mapped window of its own. Pinned windows belong to the output and only ride along
+    // with its active workspace, so they never make a workspace occupied.
     [[nodiscard]] bool occupied() const;
     // Minimize every floating window here that can be, remembering the focus. When none is left to hide, restore
     // every minimized window here, however it was minimized, and return focus to where it was.

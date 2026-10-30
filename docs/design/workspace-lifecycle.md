@@ -19,6 +19,8 @@ The inventory maintains these invariants:
 
 Dynamic reconciliation waits while a workspace slide is active. During the overview it proceeds immediately and notifies the overview so its inventory can be rebuilt.
 
+Occupancy counts mapped, unpinned windows. A client can unmap without destroying its toplevel, so map and unmap events reconcile the inventory even when workspace membership is retained. An eligible empty inactive anonymous workspace is pruned despite retaining unmapped views; those views detach and use normal placement if they remap later. A remap before pruning keeps its workspace and restores the required empty sentinels.
+
 ### Launch placement
 
 An activation token created for `spawn` records the preferred output and its active workspace. A trusted client-created token records the workspace of its input source. Pinned sources record the active workspace on the output where they are presented. A launch from an active scratchpad, including an empty one, also records its name. A trusted token from a scratchpad window records that window's pad; a layer-shell launcher records the active pad on its output. The workspace remains the return destination for a scratchpad launch. Umbriel associates that origin with a new native toplevel through XDG activation, or through a private inherited token for applications that do not use the protocol.

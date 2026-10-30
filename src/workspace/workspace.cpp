@@ -429,9 +429,7 @@ namespace umbriel {
     }
   }
 
-  bool Workspace::occupied() const {
-    return std::ranges::any_of(m_views, [](const View* view) { return !view->pinned(); });
-  }
+  bool Workspace::occupied() const { return std::ranges::any_of(m_views, sharesWorkspace); }
 
   void Workspace::adoptPinnedViews(Workspace& from) {
     if (&from == this) {
@@ -3141,7 +3139,7 @@ namespace umbriel {
       Workspace* workspace = m_workspaces[index].get();
       if (!workspace->named()
           && !workspace->displacedWorkspace()
-          && !workspace->hasViews()
+          && std::ranges::none_of(workspace->allViews(), &View::mapped)
           && !workspace->launchReserved()
           && workspace != activeKeeper
           && workspace != backKeeper
