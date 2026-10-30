@@ -767,6 +767,9 @@ UMBRIEL_TEST(payloadAlternativeMatchesTheDeclaredArgKind) {
     case ActionArgKind::TabIndex:
       input += " 2";
       break;
+    case ActionArgKind::WorkspaceMoveToOutput:
+      input += " current WEB --output DP-1";
+      break;
     case ActionArgKind::Workspace:
       input += " 1";
       break;
@@ -821,6 +824,9 @@ UMBRIEL_TEST(payloadAlternativeMatchesTheDeclaredArgKind) {
       break;
     case ActionArgKind::TabIndex:
       CHECK(umbriel::payloadIf<umbriel::TabIndexArg>(bind) != nullptr);
+      break;
+    case ActionArgKind::WorkspaceMoveToOutput:
+      CHECK(umbriel::payloadIf<umbriel::WorkspaceMoveToOutputArg>(bind) != nullptr);
       break;
     case ActionArgKind::Workspace:
       CHECK(umbriel::payloadIf<umbriel::WorkspaceArg>(bind) != nullptr);
@@ -917,6 +923,9 @@ UMBRIEL_TEST(everyActionSpecRoundTripsThroughParseAction) {
       break;
     case ActionArgKind::TabIndex:
       input += " 2";
+      break;
+    case ActionArgKind::WorkspaceMoveToOutput:
+      input += " current WEB --output DP-1";
       break;
     case ActionArgKind::Workspace:
       input += " 1";
@@ -1063,6 +1072,8 @@ UMBRIEL_TEST(everyAdvertisedActionParsesWithItsDeclaredArgument) {
       return " resize";
     case ActionArgKind::Fraction:
       return " 0.5";
+    case ActionArgKind::WorkspaceMoveToOutput:
+      return " current WEB --output DP-1";
     case ActionArgKind::Workspace:
       return " 1";
     case ActionArgKind::WindowEffectSet:
@@ -1113,6 +1124,8 @@ UMBRIEL_TEST(everyAdvertisedActionParsesWithItsDeclaredArgument) {
       return "<name>";
     case ActionArgKind::Fraction:
       return "<fraction>";
+    case ActionArgKind::WorkspaceMoveToOutput:
+      return "<destination> [<workspace>] [--output <output>]";
     case ActionArgKind::Workspace:
       return "<workspace> [--output <output>]";
     case ActionArgKind::WindowEffectSet:
@@ -1433,6 +1446,34 @@ UMBRIEL_TEST(effectCycleRejectsOffAndLayoutToggleNeedsTwoModes) {
   CHECK(!parseAction("effect-window-cycle off", bind));
   CHECK(!parseAction("workspace-set-layout toggle master", bind));
   CHECK(parseAction("window-move-to top_left -10 20 --window w", bind));
+}
+
+UMBRIEL_TEST(workspaceOutputTargetsReuseWorkspaceSelectors) {
+  const struct {
+    std::string_view input;
+    umbriel::WorkspaceMoveToOutputArg expected;
+  } cases[] = {
+      {"DP-2", {"DP-2", std::nullopt}},
+      {"--output DP-1 current --name 3", {"current", umbriel::WorkspaceArg{umbriel::WorkspaceName{"3"}, "DP-1"}}},
+      {"'Vendor Model Serial' 'My web'",
+       {"Vendor Model Serial", umbriel::WorkspaceArg{umbriel::WorkspaceName{"My web"}, ""}}},
+      {"DP-2 3 --output DP-1", {"DP-2", umbriel::WorkspaceArg{umbriel::WorkspaceIndex{3}, "DP-1"}}},
+  };
+  for (const auto& [input, expected] : cases) {
+    Keybind bind;
+    CHECK(parseAction("workspace-move-to-output " + std::string(input), bind));
+    const auto* arg = umbriel::payloadIf<umbriel::WorkspaceMoveToOutputArg>(bind);
+    CHECK(arg != nullptr && *arg == expected);
+  }
+  for (const std::string_view input :
+       {"workspace-move-to-output", "workspace-move-to-output DP-2 --output DP-1",
+        "workspace-move-to-output current WEB OTHER", "workspace-move-to-output current WEB --name WEB",
+        "workspace-move-to-output current WEB --output", "workspace-move-to-output current 0",
+        "workspace-move-to-output current 65", "workspace-move-to-output:DP-2/WEB/DP-1",
+        "workspace-move-to-output DP-2 WEB --output DP-1 --output DP-3"}) {
+    Keybind bind;
+    CHECK(!parseAction(input, bind));
+  }
 }
 
 int main() { return RUN_TESTS(); }
