@@ -53,6 +53,15 @@ namespace {
     return buf;
   }
 
+  // Subpixel antialiasing assumes an opaque, pixel-aligned destination; these textures are blended, so it fringes.
+  void useGrayscaleAntialias(cairo_t* cr) {
+    cairo_font_options_t* options = cairo_font_options_create();
+    cairo_get_font_options(cr, options);
+    cairo_font_options_set_antialias(options, CAIRO_ANTIALIAS_GRAY);
+    cairo_set_font_options(cr, options);
+    cairo_font_options_destroy(options);
+  }
+
 } // namespace
 
 namespace umbriel {
@@ -71,6 +80,7 @@ namespace umbriel {
     cairo_surface_t* measureSurface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
     cairo_t* measureCr = cairo_create(measureSurface);
     cairo_scale(measureCr, scale, scale);
+    useGrayscaleAntialias(measureCr);
     PangoLayout* measureLayout = pango_cairo_create_layout(measureCr);
     PangoFontDescription* fontDesc = pango_font_description_from_string(params.font.c_str());
     pango_layout_set_font_description(measureLayout, fontDesc);
@@ -107,6 +117,7 @@ namespace umbriel {
     CairoBuffer* cairoBuf = createCairoBuffer(pixelW, pixelH);
     cairo_t* cr = cairo_create(cairoBuf->surface);
     cairo_scale(cr, scale, scale);
+    useGrayscaleAntialias(cr);
 
     // Background.
     cairo_set_source_rgba(cr, params.bgR, params.bgG, params.bgB, params.bgA);
