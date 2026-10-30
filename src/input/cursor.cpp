@@ -743,8 +743,7 @@ namespace umbriel {
     constexpr size_t kBytesPerPixel = sizeof(uint32_t);
     const auto width = static_cast<uint32_t>(buffer->width);
     const auto height = static_cast<uint32_t>(buffer->height);
-    const bool widthOverflows = width > std::numeric_limits<size_t>::max() / kBytesPerPixel;
-    const size_t rowBytes = widthOverflows ? 0 : static_cast<size_t>(width) * kBytesPerPixel;
+    const size_t rowBytes = static_cast<size_t>(width) * kBytesPerPixel;
     const bool sizeOverflows = rowBytes == 0 || height > std::numeric_limits<size_t>::max() / rowBytes;
     if (format == DRM_FORMAT_ARGB8888 && pixels != nullptr && stride >= rowBytes && !sizeOverflows) {
       m_clientCursorPixels.resize(rowBytes * height);

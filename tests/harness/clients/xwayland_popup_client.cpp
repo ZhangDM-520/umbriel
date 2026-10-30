@@ -1,6 +1,8 @@
 // A real X11 window whose popup type and override-redirect flag can change
 // while mapped. The client requests its small rectangle before the first map.
 
+#include "parse_ints.h"
+
 #include <array>
 #include <cerrno>
 #include <cstdio>
@@ -270,19 +272,13 @@ namespace {
         );
       }
     } else if (line.starts_with("geometry ")) {
-      int x = 0, y = 0, width = 0, height = 0;
-      char extra = 0;
-      const std::string text(line);
-      if (std::sscanf(text.c_str(), "geometry %d %d %d %d %c", &x, &y, &width, &height, &extra) != 4
-          || width < 1
-          || width > 65535
-          || height < 1
-          || height > 65535) {
+      const auto geometry = harness::parseInts<int, 4>(line.substr(9), ' ');
+      if (!geometry || (*geometry)[2] < 1 || (*geometry)[2] > 65535 || (*geometry)[3] < 1 || (*geometry)[3] > 65535) {
         valid = false;
       } else {
         const std::array<uint32_t, 4> values{
-            static_cast<uint32_t>(x), static_cast<uint32_t>(y), static_cast<uint32_t>(width),
-            static_cast<uint32_t>(height)
+            static_cast<uint32_t>((*geometry)[0]), static_cast<uint32_t>((*geometry)[1]),
+            static_cast<uint32_t>((*geometry)[2]), static_cast<uint32_t>((*geometry)[3])
         };
         check(
             state,

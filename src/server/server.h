@@ -661,7 +661,7 @@ namespace umbriel {
     void handleWorkspaceCommit(void* data);
     [[nodiscard]] Workspace* workspaceFromHandle(wlr_ext_workspace_handle_v1* handle) const;
     bool applyOutputManagerConfig(wlr_output_configuration_v1* config, bool testOnly);
-    bool commitOutputEnabled(Output& output, bool enabled);
+    bool commitOutputEnabled(Output& target, bool enabled);
     [[nodiscard]] bool initialOutputEnabled(const Output& output);
     void rememberOutputEnableOverride(const Output& output, bool enabled);
     void restoreDisplacedViews();

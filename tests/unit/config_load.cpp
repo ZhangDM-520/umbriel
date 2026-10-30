@@ -31,12 +31,9 @@ using umbriel::WindowDragToggle;
 
 namespace {
   bool containsDiagnostic(const ConfigStore& store, const std::string& text) {
-    for (const ConfigDiagnostic& diagnostic : store.diagnostics()) {
-      if (diagnostic.message.contains(text)) {
-        return true;
-      }
-    }
-    return false;
+    return std::ranges::any_of(store.diagnostics(), [&text](const ConfigDiagnostic& diagnostic) {
+      return diagnostic.message.contains(text);
+    });
   }
 
   class TempConfig {
@@ -4780,7 +4777,7 @@ UMBRIEL_TEST(titleBarModesUseStrictVocabulary) {
     CHECK(store.diagnostics().empty());
     CHECK_EQ(store.config().appearance.titleBar.mode, mode);
   }
-  for (const auto name : {"auto", "force", "on-demand"}) {
+  for (const auto* const name : {"auto", "force", "on-demand"}) {
     file.write(std::string("[appearance.title_bar]\nmode = \"") + name + "\"\n");
     CHECK(store.reload().success);
     CHECK_EQ(store.config().appearance.titleBar.mode, umbriel::TitleBarMode::Off);

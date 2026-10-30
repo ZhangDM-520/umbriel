@@ -81,7 +81,7 @@ namespace umbriel {
         return std::nullopt;
       }
       const double value = band.get<double>();
-      if (!(value >= 0.0 && value <= 1.0)) {
+      if (std::isnan(value) || value < 0.0 || value > 1.0) {
         return std::nullopt;
       }
       audio[i] = static_cast<float>(value);

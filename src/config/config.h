@@ -366,7 +366,7 @@ namespace umbriel {
     Game,
   };
 
-  [[nodiscard]] inline constexpr std::string_view contentTypeName(ContentType type) {
+  [[nodiscard]] constexpr std::string_view contentTypeName(ContentType type) {
     switch (type) {
     case ContentType::None:
       return "none";
@@ -1268,12 +1268,7 @@ namespace umbriel {
           return true;
         }
       }
-      for (const LayerRule& rule : layerRules) {
-        if (rule.optimized.value_or(false)) {
-          return true;
-        }
-      }
-      return false;
+      return std::ranges::any_of(layerRules, [](const LayerRule& rule) { return rule.optimized.value_or(false); });
     }
 
     bool operator==(const Config&) const = default;

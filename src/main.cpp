@@ -435,7 +435,7 @@ int main(int argc, char** argv) {
     if (purgeResult != 0) {
       kLog.warn("failed to purge jemalloc arenas: {}", std::strerror(purgeResult));
     }
-#elif defined(__GLIBC__)
+#elifdef __GLIBC__
     malloc_trim(0);
 #endif
 

@@ -1316,17 +1316,15 @@ namespace umbriel {
         }
         view->toggleFloating(false);
         return true;
-      } else {
-
-        if (scratchpadHoldsFocus(server)) {
-          return true;
+      }
+      if (scratchpadHoldsFocus(server)) {
+        return true;
+      }
+      if (Workspace* workspace = activeWorkspace(server)) {
+        if (workspace->layoutMode() == LayoutMode::Stacking) {
+          return reject(error, "window-toggle-floating needs a tiling layout");
         }
-        if (Workspace* workspace = activeWorkspace(server)) {
-          if (workspace->layoutMode() == LayoutMode::Stacking) {
-            return reject(error, "window-toggle-floating needs a tiling layout");
-          }
-          workspace->toggleFocusedFloating();
-        }
+        workspace->toggleFocusedFloating();
       }
       return true;
     }

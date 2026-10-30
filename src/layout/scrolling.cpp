@@ -192,13 +192,13 @@ namespace umbriel {
     }
 
     bool columnFillsViewport(const Column& column, const Layout& layout) {
-      for (const View* view : column.views) {
-        const LayoutConstraints constraints = layout.constraintsFor(view);
-        if (view != nullptr && (constraints.fullscreen || constraints.maximizedToEdges)) {
-          return true;
+      return std::ranges::any_of(column.views, [&layout](const View* view) {
+        if (view == nullptr) {
+          return false;
         }
-      }
-      return false;
+        const LayoutConstraints constraints = layout.constraintsFor(view);
+        return constraints.fullscreen || constraints.maximizedToEdges;
+      });
     }
 
     // Fullscreen and maximize-to-edges views are presented against the wider

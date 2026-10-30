@@ -46,7 +46,7 @@ namespace umbriel {
   class Overview : public Animatable {
   public:
     explicit Overview(Server& server);
-    ~Overview();
+    ~Overview() override;
 
     Overview(const Overview&) = delete;
     Overview& operator=(const Overview&) = delete;

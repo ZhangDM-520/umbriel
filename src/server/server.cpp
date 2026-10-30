@@ -52,6 +52,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <format>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -212,7 +213,7 @@ namespace umbriel {
       std::string configuredAssignments;
       for (const auto& [name, value] : config().environment.variables) {
         configuredAssignments += ' ';
-        configuredAssignments += shellQuote(name + "=" + value);
+        configuredAssignments += shellQuote(std::format("{}={}", name, value));
       }
 
       const std::string publishConfigured =

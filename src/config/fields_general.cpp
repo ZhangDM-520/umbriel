@@ -179,7 +179,7 @@ namespace umbriel {
 
     // Overview badge keys: printable ASCII, unique ignoring case.
     std::optional<std::string> parseShortcutKeys(const toml::node& node, const std::string& path) {
-      const auto value = node.value<std::string>();
+      auto value = node.value<std::string>();
       if (!value) {
         warnAt(node.source(), "ignoring {} (expected string)", path);
         return std::nullopt;
@@ -392,7 +392,7 @@ namespace umbriel {
     std::vector<TitleBarButton> buttons;
     for (const toml::node& entry : *array) {
       const auto* value = entry.as_string();
-      const auto found = value != nullptr
+      const auto* const found = value != nullptr
           ? std::ranges::find(kTitleBarButtonNames, value->get(), &std::pair<std::string_view, TitleBarButton>::first)
           : kTitleBarButtonNames.end();
       if (found == kTitleBarButtonNames.end()) {

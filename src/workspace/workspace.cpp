@@ -530,12 +530,7 @@ namespace umbriel {
     if (!sharesWorkspace(view)) {
       return false;
     }
-    for (View* other : m_views) {
-      if (other != view && sharesWorkspace(other)) {
-        return false;
-      }
-    }
-    return true;
+    return std::ranges::all_of(m_views, [&](const View* other) { return other == view || !sharesWorkspace(other); });
   }
 
   void Workspace::exitFullscreenForIncomingView(const View* joining) {

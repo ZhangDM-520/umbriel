@@ -260,7 +260,7 @@ namespace {
         if (const auto* arg = umbriel::payloadIf<umbriel::EffectWindowArg>(bind)) {
           std::string value = arg->name;
           appendFlag(value, "window", arg->id);
-          return value.empty() ? name : name + ": " + value;
+          return value.empty() ? name : std::format("{}: {}", name, value);
         }
         return name;
       case umbriel::ActionArgKind::ScreenEffectSet:
@@ -268,14 +268,14 @@ namespace {
         if (const auto* arg = umbriel::payloadIf<umbriel::EffectScreenArg>(bind)) {
           std::string value = arg->name;
           appendFlag(value, "output", arg->output);
-          return value.empty() ? name : name + ": " + value;
+          return value.empty() ? name : std::format("{}: {}", name, value);
         }
         return name;
       case umbriel::ActionArgKind::CursorEffectSet:
       case umbriel::ActionArgKind::CursorEffectCycle:
         if (const auto* arg = umbriel::payloadIf<umbriel::EffectCursorArg>(bind)) {
           std::string value = arg->name;
-          return value.empty() ? name : name + ": " + value;
+          return value.empty() ? name : std::format("{}: {}", name, value);
         }
         return name;
       case umbriel::ActionArgKind::Output:
@@ -307,7 +307,7 @@ namespace {
         if (const auto* arg = umbriel::payloadIf<umbriel::SdrWhiteArg>(bind)) {
           std::string value = std::format("{:g}", arg->nits);
           appendFlag(value, "output", arg->output);
-          return name + ": " + value;
+          return std::format("{}: {}", name, value);
         }
         return name;
       case umbriel::ActionArgKind::WindowMoveTo:
@@ -316,7 +316,7 @@ namespace {
           val += " " + std::to_string(moveTo->position.x);
           val += " " + std::to_string(moveTo->position.y);
           appendFlag(val, "window", moveTo->id);
-          return name + ": " + val;
+          return std::format("{}: {}", name, val);
         }
         return name;
       case umbriel::ActionArgKind::WindowMoveBy:
@@ -324,7 +324,7 @@ namespace {
           std::string val = std::to_string(moveBy->deltaX);
           val += " " + std::to_string(moveBy->deltaY);
           appendFlag(val, "window", moveBy->id);
-          return name + ": " + val;
+          return std::format("{}: {}", name, val);
         }
         return name;
       }

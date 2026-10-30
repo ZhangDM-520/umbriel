@@ -59,7 +59,7 @@ namespace umbriel {
   public:
     View(Server& server, wlr_xdg_toplevel* toplevel);
     View(Server& server, wlr_xwayland_surface* xsurface);
-    ~View();
+    ~View() override;
 
     View(const View&) = delete;
     View& operator=(const View&) = delete;
