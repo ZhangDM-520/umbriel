@@ -418,7 +418,7 @@ namespace umbriel {
       return result;
     }
 
-    if (workspace.layoutMode() == LayoutMode::Floating) {
+    if (workspace.layoutMode() == LayoutMode::Stacking) {
       // Floating workspaces offer no tiled drop target or hint.
       return result;
     }
@@ -521,8 +521,8 @@ namespace umbriel {
     if (server.scratchpadManager() != nullptr && server.scratchpadManager()->contains(&view)) {
       return;
     }
-    if (target.layoutMode() == LayoutMode::Floating) {
-      view.floatForLayout();
+    if (target.layoutMode() == LayoutMode::Stacking) {
+      view.floatForStackingLayout();
       view.moveToWorkspace(&target);
       target.markArrange(animate);
       server.focusView(&view, FocusReason::DragDrop);

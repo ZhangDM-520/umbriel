@@ -1,5 +1,7 @@
 #include "cli/ipc_client.h"
 
+#include "config/keybind_parse.h"
+#include "server/action_request.h"
 #include "server/ipc_commands.h"
 
 #include <array>
@@ -72,82 +74,106 @@ namespace umbriel {
       }
       return true;
     }
-  } // namespace
 
-  int runIpcCommand(const IpcCommandSpec& spec, std::string_view arg, bool json) {
-    const int fd = connectToCompositor();
-    if (fd < 0) {
-      return EXIT_FAILURE;
-    }
-
-    // A one-shot request answers within its command's limit or not at all; the event stream deliberately skips this.
-    timeval tv{};
-    tv.tv_sec = spec.replyTimeoutSec;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    // Build request.
-    nlohmann::json req;
-    req["cmd"] = spec.name;
-    if (spec.takesArg) {
-      req["arg"] = std::string(arg);
-    }
-    std::string payload = req.dump() + "\n";
-
-    if (!sendAll(fd, payload)) {
-      close(fd);
-      return EXIT_FAILURE;
-    }
-
-    // Receive.
-    std::string buf;
-    char chunk[4096];
-    while (true) {
-      ssize_t n = recv(fd, chunk, sizeof(chunk), 0);
-      if (n <= 0) {
-        break;
+    // Sends one request and prints its reply: the `ok` value as JSON, through `printHuman`, or nothing.
+    int
+    exchange(const nlohmann::json& request, int replyTimeoutSec, void (*printHuman)(const nlohmann::json&), bool json) {
+      const int fd = connectToCompositor();
+      if (fd < 0) {
+        return EXIT_FAILURE;
       }
-      buf.append(chunk, static_cast<size_t>(n));
-    }
-    close(fd);
 
-    if (buf.empty()) {
-      std::println(stderr, "error: malformed response");
-      return EXIT_FAILURE;
-    }
+      // A one-shot request answers within its command's limit or not at all; the event stream deliberately skips this.
+      timeval tv{};
+      tv.tv_sec = replyTimeoutSec;
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    // Strip trailing newline.
-    if (buf.back() == '\n') {
-      buf.pop_back();
-    }
+      if (!sendAll(fd, request.dump() + "\n")) {
+        close(fd);
+        return EXIT_FAILURE;
+      }
 
-    auto resp = nlohmann::json::parse(buf, nullptr, false);
-    if (resp.is_discarded()) {
-      std::println(stderr, "error: malformed response");
-      return EXIT_FAILURE;
-    }
+      // Receive.
+      std::string buf;
+      char chunk[4096];
+      while (true) {
+        ssize_t n = recv(fd, chunk, sizeof(chunk), 0);
+        if (n <= 0) {
+          break;
+        }
+        buf.append(chunk, static_cast<size_t>(n));
+      }
+      close(fd);
 
-    if (resp.contains("err")) {
-      std::println(stderr, "error: {}", resp["err"].get<std::string>());
-      return EXIT_FAILURE;
-    }
+      if (buf.empty()) {
+        std::println(stderr, "error: malformed response");
+        return EXIT_FAILURE;
+      }
 
-    if (!resp.contains("ok")) {
-      std::println(stderr, "error: malformed response");
-      return EXIT_FAILURE;
-    }
+      // Strip trailing newline.
+      if (buf.back() == '\n') {
+        buf.pop_back();
+      }
 
-    const auto& ok = resp["ok"];
+      auto resp = nlohmann::json::parse(buf, nullptr, false);
+      if (resp.is_discarded()) {
+        std::println(stderr, "error: malformed response");
+        return EXIT_FAILURE;
+      }
 
-    if (json) {
-      std::println("{}", ok.dump());
+      if (resp.contains("err")) {
+        std::println(stderr, "error: {}", resp["err"].get<std::string>());
+        return EXIT_FAILURE;
+      }
+
+      if (!resp.contains("ok")) {
+        std::println(stderr, "error: malformed response");
+        return EXIT_FAILURE;
+      }
+
+      const auto& ok = resp["ok"];
+
+      if (json) {
+        std::println("{}", ok.dump());
+        return EXIT_SUCCESS;
+      }
+
+      if (printHuman != nullptr) {
+        printHuman(ok);
+      }
+
       return EXIT_SUCCESS;
     }
+  } // namespace
 
-    if (spec.printHuman != nullptr) {
-      spec.printHuman(ok);
+  int runIpcCommand(const IpcCommandSpec& spec, std::span<const std::string> args, bool json) {
+    nlohmann::json req;
+    req["cmd"] = spec.name;
+    if (spec.takesArgs) {
+      nlohmann::json array = nlohmann::json::array();
+      for (const auto& arg : args) {
+        array.push_back(arg);
+      }
+      req["args"] = std::move(array);
     }
+    return exchange(req, spec.replyTimeoutSec, spec.printHuman, json);
+  }
 
-    return EXIT_SUCCESS;
+  int runIpcAction(std::span<const std::string> words, bool json) {
+    const ActionSpec* spec = words.empty() ? nullptr : findActionSpec(words.front());
+    if (spec == nullptr) {
+      std::println(stderr, "error: unknown action: {}", words.empty() ? std::string{} : words.front());
+      return EXIT_FAILURE;
+    }
+    Keybind bind;
+    if (!parseActionWords(words, bind)) {
+      std::println(
+          stderr, "error: invalid arguments for {}; usage: {}{}{}", spec->name, spec->name,
+          spec->param.empty() ? "" : " ", spec->param
+      );
+      return EXIT_FAILURE;
+    }
+    return exchange(actionRequest(bind), 2, nullptr, json);
   }
 
   int runIpcSubscribe(const std::vector<std::string>& events) {

@@ -84,7 +84,7 @@ namespace umbriel {
     [[nodiscard]] bool animatesOn(const Output* /*output*/) const override { return true; }
 
     void onViewMapped(View* view);
-    void onViewUnmapped(View* view);
+    void onViewUnmapped(View* view, bool animateClose = true);
     void onViewPinnedChanged(View* view);
     void onViewFloatingChanged(View* view);
     void onViewWorkspaceChanged(View* view);

@@ -12,6 +12,7 @@
 #include "input/cursor.h"
 #include "input/eis.h"
 #include "input/gestures.h"
+#include "input/input_capture.h"
 #include "input/keyboard.h"
 #include "input/keyboard_leds.h"
 #include "input/seat.h"
@@ -361,6 +362,10 @@ namespace umbriel {
   }
 
   void Server::dismissConfirmation() {
+    if (m_pendingCaptureId != 0 && m_inputCapture != nullptr) {
+      const auto id = std::exchange(m_pendingCaptureId, 0);
+      m_inputCapture->authorizeSession(id, false);
+    }
     if (m_pendingInputId != 0) {
       const auto id = std::exchange(m_pendingInputId, 0);
       m_deniedInputNames.insert(m_pendingInputName);
@@ -426,6 +431,109 @@ namespace umbriel {
     m_pendingInputName.clear();
     if (m_quitConfirm != nullptr && m_quitConfirm->kind() == QuitConfirm::Kind::InputEmulation) {
       m_quitConfirm->hide();
+    }
+  }
+
+  void Server::requestInputCapture(uint64_t id, std::string_view name, uint32_t persistMode) {
+    if (m_stopping
+        || m_sessionLock != nullptr
+        || sessionLocked()
+        || (m_session != nullptr && !m_session->active)
+        || name.size() > 256
+        || m_quitConfirm == nullptr
+        || m_quitConfirm->visible()
+        || (m_inputCapture != nullptr && m_inputCapture->active())) {
+      m_inputCapture->authorizeSession(id, false);
+      return;
+    }
+    m_pendingCaptureId = id;
+    std::string label;
+    for (const unsigned char character : name) {
+      label += character >= 32 && character < 127 ? static_cast<char>(character) : '?';
+    }
+    m_quitConfirm->showInputCapture(label.empty() ? "Unknown application" : label, persistMode);
+    if (!m_quitConfirm->visible()) {
+      dismissConfirmation();
+    }
+  }
+
+  void Server::confirmInputCapture(bool remember) {
+    if (m_pendingCaptureId == 0
+        || m_inputCapture == nullptr
+        || m_sessionLock != nullptr
+        || sessionLocked()
+        || (m_session != nullptr && !m_session->active)
+        || (remember && (m_quitConfirm == nullptr || !m_quitConfirm->canRememberInputCapture()))) {
+      dismissConfirmation();
+      return;
+    }
+    const auto id = std::exchange(m_pendingCaptureId, 0);
+    m_quitConfirm->hide();
+    m_inputCapture->authorizeSession(id, true, remember);
+  }
+
+  void Server::cancelInputCapture(uint64_t id) {
+    if (m_pendingCaptureId != id) {
+      return;
+    }
+    m_pendingCaptureId = 0;
+    if (m_quitConfirm != nullptr && m_quitConfirm->kind() == QuitConfirm::Kind::InputCapture) {
+      m_quitConfirm->hide();
+    }
+  }
+
+  void Server::inputCaptureStateChanged(bool active) {
+    if (m_stopping) {
+      return;
+    }
+    const uint32_t capabilities = active ? m_inputCapture->capabilities() : m_inputCaptureCapabilities;
+    m_inputCaptureCapabilities = active ? capabilities : 0;
+    cancelModifierTap();
+    if ((capabilities & 1U) != 0) {
+      for (const auto& keyboard : m_keyboards) {
+        keyboard->prepareInputCapture(!active);
+      }
+      if (active) {
+        notifyKeyboardClearFocus();
+        m_seat->notifyPointerModifiers(true);
+      } else if (!sessionLocked()) {
+        refocus();
+        if (m_eisInput != nullptr) {
+          if (wlr_keyboard* keyboard = wlr_seat_get_keyboard(m_seat->wlr()); keyboard != nullptr) {
+            m_eisInput->updateModifiers(keyboard->modifiers);
+          }
+        }
+      }
+    }
+    if ((capabilities & 2U) != 0 && m_cursor != nullptr) {
+      m_cursor->setInputCaptured(active);
+    }
+  }
+
+  bool Server::physicalInputDevice(const wlr_input_device* device) const {
+    return device != nullptr
+        && (m_eisInput == nullptr || !m_eisInput->ownsDevice(device))
+        && std::ranges::none_of(m_virtualPointers, [device](const auto& pointer) {
+             return &pointer->vpointer->pointer.base == device;
+           });
+  }
+
+  bool Server::keyboardKeyConsumed(wlr_keyboard* keyboard, uint32_t keycode) const {
+    const auto entry =
+        std::ranges::find_if(m_keyboards, [keyboard](const auto& candidate) { return candidate->wlr() == keyboard; });
+    return entry != m_keyboards.end() && (*entry)->consumedKeycodes().contains(keycode);
+  }
+
+  void Server::onSessionActive(wl_listener* listener, void* /*data*/) {
+    Server* self;
+    self = wl_container_of(listener, self, m_sessionActive);
+    if (!self->m_session->active) {
+      if (self->m_inputCapture != nullptr) {
+        self->m_inputCapture->suspend();
+      }
+      if (self->m_pendingCaptureId != 0) {
+        self->dismissConfirmation();
+      }
     }
   }
 
@@ -721,7 +829,6 @@ namespace umbriel {
     wl_signal_add(&m_shortcutsInhibitManager->events.new_inhibitor, &m_newShortcutsInhibitor);
 
     wlr_screencopy_manager_v1_create(m_display);
-    m_exportDmabufManager = wlr_export_dmabuf_manager_v1_create(m_display);
     wlr_ext_output_image_capture_source_manager_v1_create(m_display, 1);
     wlr_ext_image_copy_capture_manager_v1* imageCopyManager =
         wlr_ext_image_copy_capture_manager_v1_create(m_display, 1);
@@ -828,6 +935,10 @@ namespace umbriel {
 
   Server::~Server() {
     m_stopping = true;
+    m_inputCapture.reset();
+    if (m_sessionActive.link.next != nullptr) {
+      wl_list_remove(&m_sessionActive.link);
+    }
     m_keyboardLeds.reset();
     if (m_cursor != nullptr) {
       m_cursor->finishToplevelDrag(false);
@@ -1115,6 +1226,22 @@ namespace umbriel {
     setenv("XCURSOR_SIZE", cursorSize.c_str(), 1);
     if (!cursorCfg.theme.empty()) {
       setenv("XCURSOR_THEME", cursorCfg.theme.c_str(), 1);
+    }
+
+    m_inputCapture = std::make_unique<InputCapture>(*this);
+    m_inputCapture->setAuthorize([this](uint64_t id, std::string_view name, uint32_t persistMode) {
+      requestInputCapture(id, name, persistMode);
+    });
+    m_inputCapture->setAuthorizationCancelled([this](uint64_t id) { cancelInputCapture(id); });
+    m_inputCapture->setActiveChanged([this](bool active) { inputCaptureStateChanged(active); });
+    for (const auto& keyboard : m_keyboards) {
+      if (!keyboard->virtualDevice()) {
+        m_inputCapture->addKeyboard(keyboard->wlr());
+      }
+    }
+    if (m_session != nullptr) {
+      m_sessionActive.notify = onSessionActive;
+      wl_signal_add(&m_session->events.active, &m_sessionActive);
     }
 
     // Create the Xwayland server before session services and autostart so X11

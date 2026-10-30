@@ -1041,10 +1041,10 @@ UMBRIEL_TEST(effectPoolDefinitionsAndMemberOrderRaiseEffectsChange) {
 UMBRIEL_TEST(effectActionRootChangesDrivePreparation) {
   Config before;
   Keybind selected;
-  CHECK(umbriel::parseAction("effect-window-set:pool/window-1", selected));
+  CHECK(umbriel::parseAction("effect-window-set pool --window window-1", selected));
   before.keybinds = {selected};
   Config after = before;
-  CHECK(umbriel::parseAction("effect-window-cycle:pool/window-2", after.keybinds.front()));
+  CHECK(umbriel::parseAction("effect-window-cycle pool --window window-2", after.keybinds.front()));
   CHECK(!ConfigEffects::between(before, after).effects);
   after.keybinds.front().cooldownMs = 100;
   after.keybinds.front().submap = "effects";
@@ -1058,10 +1058,10 @@ UMBRIEL_TEST(effectActionRootChangesDrivePreparation) {
   CHECK(ConfigEffects::between(before, after).effects);
   CHECK(umbriel::configuredEffectActionRoots(after).empty());
   after = before;
-  CHECK(umbriel::parseAction("effect-window-set:other", after.keybinds.front()));
+  CHECK(umbriel::parseAction("effect-window-set other", after.keybinds.front()));
   CHECK(ConfigEffects::between(before, after).effects);
   after = before;
-  CHECK(umbriel::parseAction("effect-window-set:off", after.keybinds.front()));
+  CHECK(umbriel::parseAction("effect-window-set off", after.keybinds.front()));
   CHECK(ConfigEffects::between(before, after).effects);
   after = before;
   CHECK(umbriel::parseAction("effect-window-cycle", after.keybinds.front()));
@@ -1071,7 +1071,7 @@ UMBRIEL_TEST(effectActionRootChangesDrivePreparation) {
 UMBRIEL_TEST(effectActionRootsAreUniqueAcrossKeybindsAndCorners) {
   Config config;
   config.keybinds.clear();
-  for (const std::string action : {"effect-border-set:zebra", "effect-screen-cycle:alpha", "effect-border-set:zebra"}) {
+  for (const std::string action : {"effect-border-set zebra", "effect-screen-cycle alpha", "effect-border-set zebra"}) {
     Keybind bind;
     CHECK(umbriel::parseAction(action, bind));
     config.keybinds.push_back(bind);

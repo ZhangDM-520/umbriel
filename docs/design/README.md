@@ -17,9 +17,14 @@ Start with the user guide when a detail affects configuration or normal use. Use
 - [Automatic HDR color feedback](automatic-hdr.md)
 - [Xwayland input stability](xwayland-input-stability.md)
 - [Xwayland input emulation](input-emulation.md)
+- [Portal input capture](input-capture.md)
 - [Client buffer constraints](client-buffer-constraints.md)
 - [Scene helper ownership](scene-helper-ownership.md)
 - [DRM GPU exclusion](drm-device-policy.md)
+
+## Pull request template checks
+
+The canonical pull request checklist is in [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). Keep `MANDATORY_CHECKLIST_ITEMS` in [the enforcement script](../../.github/workflows/scripts/enforce-pr-template.py) aligned with that wording when the template changes. `just test-workflows` checks acceptance of the actual template with both unchecked and completed checklists.
 
 ## Harness-only IPC
 

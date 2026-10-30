@@ -360,8 +360,8 @@ namespace umbriel {
     // Move first so a simultaneous floating-size rule resolves against the destination output.
     if (!wasInScratchpad && defaultFloatingChanged) {
       const bool wantFloat = *rule.defaultFloating;
-      if (wantFloat && m_layoutFloated) {
-        m_layoutFloated = false;
+      if (wantFloat && m_floatedByStackingLayout) {
+        m_floatedByStackingLayout = false;
       }
       if (wantFloat != !m_tiled) {
         if (wantFloat) {
@@ -718,6 +718,8 @@ namespace umbriel {
       m_ruleOpacity = newOpacity;
       setFadeAlpha(m_fadeAlpha); // refresh effective opacity
     }
+    m_ruleCaptureBlocked = rule.blockCapture.value_or(false);
+    refreshCaptureProtection();
     if (const bool backgroundRender = rule.backgroundRender.value_or(false); backgroundRender != m_backgroundRender) {
       m_backgroundRender = backgroundRender;
       m_server->scheduleSuspensionSync();

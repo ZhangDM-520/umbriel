@@ -107,7 +107,7 @@ fi
 
 # Put the pointer on the focused window, then swap that window with its neighbor. ID-targeted focus must move the
 # pointer to the newly focused window, so an unmoved click must keep focus there.
-"$UMBRIEL" msg "window-focus:$first_id" > /dev/null
+"$UMBRIEL" msg window-focus "$first_id" > /dev/null
 "$POINTER" 2560 720 move "$(window_center_x "$first_id")" "$(window_center_y "$first_id")"
 before_x=$(window_x "$first_id")
 if ((before_x < $(window_x "$second_id"))); then
@@ -122,7 +122,7 @@ if [[ $after_x == "$before_x" ]]; then
   echo "$move_action did not move follow-first: $(windows)"
   exit 1
 fi
-"$UMBRIEL" msg "window-focus:$second_id" > /dev/null
+"$UMBRIEL" msg window-focus "$second_id" > /dev/null
 "$POINTER" 2560 720 click "$BTN_LEFT"
 wait_for_active "$second_id"
 
@@ -135,8 +135,8 @@ if ((other_output_x > first_output_x)); then
 else
   output_action=output-focus-left
 fi
-"$UMBRIEL" msg "window-focus:$other_id" > /dev/null
-"$UMBRIEL" msg "window-focus:$first_id" > /dev/null
+"$UMBRIEL" msg window-focus "$other_id" > /dev/null
+"$UMBRIEL" msg window-focus "$first_id" > /dev/null
 "$UMBRIEL" msg "$output_action" > /dev/null
 wait_for_active "$other_id"
 "$POINTER" 2560 720 click "$BTN_LEFT"

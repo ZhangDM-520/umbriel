@@ -110,6 +110,7 @@ namespace {
     row("-c <config>", "use <config> instead of the default config path");
 
     heading("Control the running compositor");
+    row("msg <action> [args...]", "send an action to the compositor");
     specRows(umbriel::IpcCommandGroup::Control);
 
     heading("Inspect the running compositor");
@@ -142,6 +143,45 @@ namespace {
     row("-v | -V | --version", "print version");
 
     std::println(stream, "\nRun `umbriel msg --help` to list all available actions for `msg` and keybinds.");
+  }
+
+  // `umbriel msg --help`: every action with its arguments, grouped as the cheatsheet groups them.
+  void printActionHelp() {
+    std::println("Usage: umbriel msg <action> [args...]");
+    std::println("");
+    std::println("Send an action to the running compositor.");
+    std::println(
+        "Arguments follow the action as separate words; `spawn` runs the remaining words as one shell command."
+    );
+    std::println("Available actions, grouped as the cheatsheet groups them:");
+    for (const umbriel::Group group : umbriel::fixedGroupOrder()) {
+      std::vector<std::string> names;
+      std::vector<std::string_view> summaries;
+      for (const auto& actionSpec : umbriel::actionSpecs()) {
+        if (umbriel::groupForAction(actionSpec.action) != group) {
+          continue;
+        }
+        names.emplace_back(
+            actionSpec.param.empty() ? std::string(actionSpec.name)
+                                     : std::format("{} {}", actionSpec.name, actionSpec.param)
+        );
+        summaries.push_back(actionSpec.summary);
+      }
+      if (names.empty()) {
+        continue;
+      }
+      // Pad per group: a single global column would push every summary past the width of the widest name in the
+      // table, which only one group actually needs.
+      size_t width = 0;
+      for (const auto& name : names) {
+        width = std::max(width, name.size());
+      }
+      std::println("");
+      std::println("{}", umbriel::groupTitle(group));
+      for (size_t i = 0; i < names.size(); ++i) {
+        std::println("  {:<{}}  {}", names[i], width, summaries[i]);
+      }
+    }
   }
 } // namespace
 
@@ -237,8 +277,31 @@ int main(int argc, char** argv) {
       return umbriel::runIpcSubscribe(events);
     }
 
+    // Not an IpcCommandSpec: the words are parsed here and sent as a structured action request.
+    if (std::strcmp(argv[1], "msg") == 0) {
+      if (argc == 3 && isHelpFlag(argv[2])) {
+        printActionHelp();
+        return EXIT_SUCCESS;
+      }
+      // Only flags before the action name are msg's own; everything after it belongs to the action.
+      bool jf = false;
+      std::vector<std::string> words;
+      for (int i = 2; i < argc; ++i) {
+        if (words.empty() && isJsonFlag(argv[i])) {
+          jf = true;
+        } else {
+          words.emplace_back(argv[i]);
+        }
+      }
+      if (words.empty()) {
+        printHelp(stderr);
+        return EXIT_FAILURE;
+      }
+      return umbriel::runIpcAction(words, jf);
+    }
+
     if (const auto* spec = umbriel::findIpcCommand(argv[1])) {
-      if (!spec->takesArg) {
+      if (!spec->takesArgs) {
         bool jf = false;
         for (int i = 2; i < argc; ++i) {
           if (isHelpFlag(argv[i])) {
@@ -255,63 +318,20 @@ int main(int argc, char** argv) {
         return umbriel::runIpcCommand(*spec, {}, jf);
       }
 
-      // Help only when -h/--help is the immediate argument (not buried in spawn args).
       if (argc == 3 && isHelpFlag(argv[2])) {
         std::println("Usage: umbriel {} {}", spec->name, spec->argSpec);
-        if (spec->name != "msg") {
-          std::println("");
-          std::println("{}", spec->description);
-          return EXIT_SUCCESS;
-        }
         std::println("");
-        std::println("Send an action to the running compositor.");
-        std::println("Use `msg spawn <cmd...>` as shorthand for `msg spawn:<cmd...>`.");
-        std::println("Available actions, grouped as the cheatsheet groups them:");
-        for (const umbriel::Group group : umbriel::fixedGroupOrder()) {
-          std::vector<std::string> names;
-          std::vector<std::string_view> summaries;
-          for (const auto& actionSpec : umbriel::actionSpecs()) {
-            if (umbriel::groupForAction(actionSpec.action) != group) {
-              continue;
-            }
-            names.emplace_back(
-                actionSpec.param.empty() ? std::string(actionSpec.name)
-                                         : std::format("{}:{}", actionSpec.name, actionSpec.param)
-            );
-            summaries.push_back(actionSpec.summary);
-          }
-          if (names.empty()) {
-            continue;
-          }
-          // Pad per group: a single global column would push every summary past the width of the widest name in the
-          // table, which only one group actually needs.
-          size_t width = 0;
-          for (const auto& name : names) {
-            width = std::max(width, name.size());
-          }
-          std::println("");
-          std::println("{}", umbriel::groupTitle(group));
-          for (size_t i = 0; i < names.size(); ++i) {
-            std::println("  {:<{}}  {}", names[i], width, summaries[i]);
-          }
-        }
+        std::println("{}", spec->description);
         return EXIT_SUCCESS;
       }
 
       bool jf = false;
-      // Collect non-flag args; for spawn, everything after "spawn" is literal.
-      std::vector<const char*> args;
-      bool inSpawnTail = false;
+      std::vector<std::string> args;
       for (int i = 2; i < argc; ++i) {
-        if (!inSpawnTail && isJsonFlag(argv[i])) {
+        if (isJsonFlag(argv[i])) {
           jf = true;
         } else {
-          args.push_back(argv[i]);
-          // Once we see "spawn" as the first non-flag arg and there are more,
-          // everything after belongs to the command (no flag stripping).
-          if (args.size() == 1 && std::strcmp(argv[i], "spawn") == 0) {
-            inSpawnTail = true;
-          }
+          args.emplace_back(argv[i]);
         }
       }
 
@@ -319,25 +339,7 @@ int main(int argc, char** argv) {
         printHelp(stderr);
         return EXIT_FAILURE;
       }
-
-      std::string actionString;
-      if (std::strcmp(args[0], "spawn") == 0 && args.size() > 1) {
-        actionString = "spawn:";
-        for (size_t i = 1; i < args.size(); ++i) {
-          if (i > 1) {
-            actionString += ' ';
-          }
-          actionString += args[i];
-        }
-      } else {
-        for (size_t i = 0; i < args.size(); ++i) {
-          if (i > 0) {
-            actionString += ' ';
-          }
-          actionString += args[i];
-        }
-      }
-      return umbriel::runIpcCommand(*spec, actionString, jf);
+      return umbriel::runIpcCommand(*spec, args, jf);
     }
   }
 
