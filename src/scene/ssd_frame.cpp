@@ -168,8 +168,12 @@ namespace umbriel {
         wlr_scene_node_set_enabled(&icon->node, false);
       return;
     }
-    const int size = std::max(8, (m_geometry.titleBarHeight + 1) / 2);
-    const int pixels = static_cast<int>(std::ceil(size * std::max(1.0F, m_geometry.scale)));
+    const int size = titleBarButtonDiameter(m_geometry.titleBarHeight);
+    const float scale = std::max(1.0F, m_geometry.scale);
+    // At integer scales the symbol maps 1:1 onto the button. At fractional scales the button's physical size depends
+    // on its position, and the renderer copies a buffer within one pixel of that size texel for texel, leaving the
+    // symbol half a pixel off center. Twice the resolution makes it resample symmetrically instead.
+    const int pixels = static_cast<int>(std::ceil(size * scale)) * (scale == std::floor(scale) ? 1 : 2);
     if (icon == nullptr || m_iconSizes[index] != pixels || m_iconColors[index] != color) {
       wlr_buffer* buffer = renderTitleBarIcon(button, pixels, color);
       if (icon == nullptr) {
