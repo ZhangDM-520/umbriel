@@ -72,7 +72,7 @@ screen_effect = "off"
 | `cursor`           | `""`    | Cursor preset or pool, shared across outputs.                                                                                                                                               |
 | `max_fps`          | `0`     | Cap, 0 to 240, for frames drawn only because an effect animates. `0` follows each output's refresh rate.                                                                                    |
 | `in_capture`       | `false` | Include window, screen, and cursor effects in screencopy and image-copy captures. Border effects always appear. Raw export-DMA-BUF is not advertised; use screencopy or image-copy clients. |
-| `border_unfocused` | `false` | Draw the border effect on every window that passes the non-focus gates, not just the focused one. Each additional window costs one ring capture and one program pass per frame.   
+| `border_unfocused` | `false` | Draw the border effect on every window that passes the non-focus gates, not just the focused one. Each additional window costs one ring capture and one program pass per frame.             |
 
 Where each kind draws:
 
