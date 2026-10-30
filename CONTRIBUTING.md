@@ -106,6 +106,8 @@ An instance has one output unless the check asks for more with a `# harness: out
 
 A check that needs deterministic Xcursor images declares `# harness: xcursor-theme=true`. The harness creates an isolated theme with distinct nominal sizes 24 and 48, exports its path and name, and writes the matching cursor configuration before the compositor starts.
 
+The compositor's config file watcher is off in harness instances, so a check applies a config change with `umbriel msg config-reload`. A check about automatic reloads declares `# harness: config-watch=true`, as `session/config_reload` and `effect/animation` do.
+
 A headless session starts with no keyboard, so the harness connects a keyboard-only helper to each instance before its check runs and keeps it through teardown, the way a real session always has one. Without it the seat's keyboard capability would come and go with each pointer-client run, and clients would bind `wl_keyboard` too late for the first keys. A check about how keyboards themselves arrive opts out with `# harness: keyboard=none` in its header, as `input/input_method_wheel` and `input/keyboard_keymap` do.
 
 A check that stops making progress is killed after 120 seconds, so the suite reports instead of hanging. Set `CHECK_TIMEOUT` to change the cap, and `CHECK_VERBOSE=1` (or `-v`) to keep the full output of passing checks. Passing checks emit completion messages, summarized to a single dimmed line unless verbose output is enabled. Failing checks print their whole output and keep their runtime directory (compositor log, config, and per-client logs), with its path in the report.

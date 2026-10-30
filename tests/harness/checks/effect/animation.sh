@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# harness: config-watch=true
 # Observe shader-specific intermediate colors, source sampling, completion,
 # closing snapshots, and automatic reload of an imported GLSL file.
 set -euo pipefail

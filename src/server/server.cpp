@@ -1290,12 +1290,21 @@ namespace umbriel {
       wl_event_source_timer_update(m_startupRulesTimer, kStartupRuleDurationMs);
     }
 
-    m_configWatcher = std::make_unique<ConfigWatcher>(wl_display_get_event_loop(m_display), [this] {
-      const ConfigReloadResult result = reloadConfig();
-      handleConfigReload(result);
-    });
+#ifdef UMBRIEL_TEST_IPC
+    // Harness builds only: UMBRIEL_CONFIG_WATCH=0 turns the config file watcher off.
+    const char* watchSetting = std::getenv("UMBRIEL_CONFIG_WATCH");
+    const bool watchConfig = watchSetting == nullptr || std::strcmp(watchSetting, "0") != 0;
+#else
+    constexpr bool watchConfig = true;
+#endif
+    if (watchConfig) {
+      m_configWatcher = std::make_unique<ConfigWatcher>(wl_display_get_event_loop(m_display), [this] {
+        const ConfigReloadResult result = reloadConfig();
+        handleConfigReload(result);
+      });
+      m_configWatcher->watch(configWatchPaths());
+    }
     m_configBanner = std::make_unique<ConfigBanner>(*this, m_bannerTree);
-    m_configWatcher->watch(configWatchPaths());
     showConfigDiagnostics();
     m_cheatsheet = std::make_unique<Cheatsheet>(*this, m_cheatsheetTree);
     if (config().general.showCheatsheet) {
