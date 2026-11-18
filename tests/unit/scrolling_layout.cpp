@@ -19,6 +19,7 @@ using umbriel::LayoutConstraints;
 using umbriel::ResolvedLayoutConfig;
 using umbriel::ScrollingDirection;
 using umbriel::ScrollingLayout;
+using umbriel::UnderfullStripAlign;
 using umbriel::View;
 
 namespace {
@@ -35,7 +36,7 @@ namespace {
     config.totalGap = 12;
     config.edgePad = 10;
     config.scrolling.defaultExtentFraction = 0.5;
-    config.scrolling.centerUnderfullStrip = true;
+    config.scrolling.underfullStrip = UnderfullStripAlign::Center;
     config.extentPresets = {1.0 / 3, 0.5, 2.0 / 3};
     return config;
   }
@@ -386,13 +387,21 @@ UMBRIEL_TEST(aNarrowRowIsCentered) {
   CHECK_EQ(fixture.layout.columnX(0, kViewport), (kViewport - width) / 2);
 }
 
-UMBRIEL_TEST(disablingUnderfullCenteringLeftAlignsTheWholeStrip) {
-  Fixture fixture;
-  fixture.config.scrolling.centerUnderfullStrip = false;
-  fixture.addColumns(2);
-  CHECK(fixture.layout.setWidthFraction(0, 1.0 / 3));
-  CHECK(fixture.layout.setWidthFraction(1, 1.0 / 3));
-  CHECK_EQ(fixture.layout.columnX(0, kViewport), 0);
+UMBRIEL_TEST(aNarrowRowRestsWhereTheAlignmentPutsIt) {
+  for (const UnderfullStripAlign align :
+       {UnderfullStripAlign::Start, UnderfullStripAlign::Center, UnderfullStripAlign::End}) {
+    Fixture fixture;
+    fixture.config.scrolling.underfullStrip = align;
+    fixture.addColumns(1);
+    CHECK(fixture.layout.setWidthFraction(0, 1.0 / 3));
+    const int slack = kViewport - fixture.layout.columnWidth(0, kViewport);
+    // The leftover space leads an end-aligned strip, splits around a centered one (floored), and trails a start-aligned
+    // one.
+    const int expected = align == UnderfullStripAlign::Start ? 0
+        : align == UnderfullStripAlign::Center               ? slack / 2
+                                                             : slack;
+    CHECK_EQ(fixture.layout.columnX(0, kViewport), expected);
+  }
 }
 
 UMBRIEL_TEST(horizontalResizeRecentersAnUnderfullStripImmediately) {
@@ -507,9 +516,9 @@ UMBRIEL_TEST(resizeEdgesComeFromTileThirds) {
   CHECK_EQ(fixture.layout.resizeEdgesAt(stub(1), 700, 650), static_cast<uint32_t>(WLR_EDGE_LEFT | WLR_EDGE_BOTTOM));
 }
 
-UMBRIEL_TEST(firstColumnLeftEdgeStaysFixedWithoutCentering) {
+UMBRIEL_TEST(firstColumnLeftEdgeStaysFixedOnAStartAlignedStrip) {
   Fixture fixed;
-  fixed.config.scrolling.centerUnderfullStrip = false;
+  fixed.config.scrolling.underfullStrip = UnderfullStripAlign::Start;
   fixed.addColumns(1);
   fixed.layout.arrange(kUsable);
   CHECK_EQ(fixed.layout.resizeEdgesAt(stub(0), 60, 360), 0U);
@@ -519,6 +528,196 @@ UMBRIEL_TEST(firstColumnLeftEdgeStaysFixedWithoutCentering) {
   centered.addColumns(1);
   centered.layout.arrange(kUsable);
   CHECK_EQ(centered.layout.resizeEdgesAt(stub(0), 60, 360), static_cast<uint32_t>(WLR_EDGE_LEFT));
+}
+
+UMBRIEL_TEST(lastColumnRightEdgeStaysFixedOnAFittingEndAlignedStrip) {
+  Fixture fixture;
+  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::End;
+  fixture.addColumns(1);
+  fixture.layout.arrange(kUsable);
+  const wlr_box box = fixture.layout.targetBox(stub(0));
+  const int right = box.x + box.width;
+  CHECK_EQ(fixture.layout.resizeEdgesAt(stub(0), right - 1, 360), 0U);
+  CHECK_EQ(fixture.layout.resizeEdgesAt(stub(0), box.x + 1, 360), static_cast<uint32_t>(WLR_EDGE_LEFT));
+
+  // Once the strip overflows there is no anchored rest left, so the trailing edge resizes again.
+  CHECK(fixture.layout.setWidthFraction(0, 1.5));
+  fixture.layout.arrange(kUsable);
+  const wlr_box wide = fixture.layout.targetBox(stub(0));
+  const uint32_t edges = fixture.layout.resizeEdgesAt(stub(0), wide.x + wide.width - 1, 360);
+  CHECK((edges & WLR_EDGE_RIGHT) != 0);
+}
+
+// An interior trailing boundary takes width from the next lane, so the pair's span — and the anchored trailing edge —
+// stays put and the boundary follows the pointer.
+UMBRIEL_TEST(interiorTrailingBoundaryResizesThePairOnAFittingEndAlignedStrip) {
+  Fixture fixture;
+  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::End;
+  fixture.addColumns(2);
+  CHECK(fixture.layout.setWidthFraction(0, 0.25));
+  CHECK(fixture.layout.setWidthFraction(1, 0.25));
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box secondBefore = fixture.layout.targetBox(stub(1));
+  const int boundary = secondBefore.x;
+  const int trailing = secondBefore.x + secondBefore.width;
+
+  // The pointer path proposes the trailing third, so the refusal must leave this interior boundary alone.
+  const uint32_t proposed = fixture.layout.resizeEdgesAt(stub(0), firstBefore.x + firstBefore.width - 1, 360);
+  CHECK_EQ(proposed, static_cast<uint32_t>(WLR_EDGE_RIGHT));
+
+  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_RIGHT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(40.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box secondAfter = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(firstAfter.width, firstBefore.width + 40);
+  CHECK_EQ(secondAfter.width, secondBefore.width - 40);
+  // The boundary (the second lane's leading edge) follows the pointer; the anchored trailing edge stays put.
+  CHECK_EQ(secondAfter.x, boundary + 40);
+  CHECK_EQ(secondAfter.x + secondAfter.width, trailing);
+}
+
+UMBRIEL_TEST(interiorTrailingBoundaryNeverPushesTheNextLaneBelowItsMinimum) {
+  Fixture fixture;
+  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::End;
+  fixture.addColumns(2);
+  CHECK(fixture.layout.setWidthFraction(0, 0.25));
+  CHECK(fixture.layout.setWidthFraction(1, 0.25));
+  fixture.layout.setConstraints([](const View* view) {
+    return LayoutConstraints{.maxWidth = view == stub(0) ? 350 : 0};
+  });
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box secondBefore = fixture.layout.targetBox(stub(1));
+  const int minimum = static_cast<int>(std::lround(0.15 * kViewport));
+
+  // The pointer asks for far more than the client hint allows, so the dragged column stops at the hint instead of
+  // paying the rest out of the next lane.
+  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_RIGHT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(200.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box secondAfter = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(firstAfter.width, 350);
+  CHECK(secondAfter.width >= minimum);
+  CHECK_EQ(secondAfter.width, 262);
+  // The pair keeps its span, so the anchored trailing edge stays put.
+  CHECK_EQ(firstAfter.width + secondAfter.width, firstBefore.width + secondBefore.width);
+  CHECK_EQ(secondAfter.x, firstAfter.x + firstAfter.width + fixture.config.totalGap);
+}
+
+UMBRIEL_TEST(interiorTrailingBoundaryKeepsTrackingPastTheLaneMinimum) {
+  Fixture fixture;
+  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::End;
+  fixture.addColumns(2);
+  CHECK(fixture.layout.setWidthFraction(0, 0.25));
+  CHECK(fixture.layout.setWidthFraction(1, 0.25));
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box secondBefore = fixture.layout.targetBox(stub(1));
+  const int boundary = secondBefore.x;
+  const int minimum = static_cast<int>(std::lround(0.15 * kViewport));
+  CHECK(firstBefore.width > minimum);
+
+  // Past the dragged column's minimum the next lane grows, exactly like the mirrored leading-edge drag, so the
+  // boundary stays under the pointer instead of sticking.
+  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_RIGHT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(-400.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box secondAfter = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(firstAfter.width, minimum);
+  // As on the leading edge, the far lane absorbs the whole remaining travel once the dragged column is pinned.
+  CHECK_EQ(secondAfter.width, secondBefore.width + 400);
+  CHECK_EQ(secondAfter.x, boundary - 400);
+  CHECK_EQ(secondAfter.x + secondAfter.width, secondBefore.x + secondBefore.width);
+}
+
+UMBRIEL_TEST(endAlignedInteriorCornerResizeAlsoResizesAcrossTheAxis) {
+  Fixture fixture;
+  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::End;
+  fixture.layout.insertView(stub(0), 0);
+  fixture.layout.insertViewIntoColumn(stub(1), 0, 1);
+  fixture.layout.insertView(stub(2), 1);
+  CHECK(fixture.layout.setWidthFraction(0, 0.25));
+  CHECK(fixture.layout.setWidthFraction(1, 0.25));
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box siblingBefore = fixture.layout.targetBox(stub(1));
+  const wlr_box nextBefore = fixture.layout.targetBox(stub(2));
+
+  // A corner drag carries both a primary and a cross delta: the pair branch must not swallow the latter.
+  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_RIGHT | WLR_EDGE_BOTTOM, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(40.0, 40.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box siblingAfter = fixture.layout.targetBox(stub(1));
+  const wlr_box nextAfter = fixture.layout.targetBox(stub(2));
+  CHECK_EQ(firstAfter.width, firstBefore.width + 40);
+  CHECK_EQ(nextAfter.width, nextBefore.width - 40);
+  CHECK(firstAfter.height > firstBefore.height);
+  CHECK(siblingAfter.height < siblingBefore.height);
+}
+
+UMBRIEL_TEST(centeredInteriorTrailingBoundaryStillGrowsTheStrip) {
+  Fixture fixture;
+  fixture.addColumns(2);
+  CHECK(fixture.layout.setWidthFraction(0, 0.25));
+  CHECK(fixture.layout.setWidthFraction(1, 0.25));
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstBefore = fixture.layout.targetBox(stub(0));
+  const wlr_box secondBefore = fixture.layout.targetBox(stub(1));
+  const int boundary = secondBefore.x;
+
+  // The default alignment keeps its pre-existing symmetric growth: the strip widens instead of trading with the
+  // next lane, so nothing the docs promise about earlier releases changes.
+  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_RIGHT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(40.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box firstAfter = fixture.layout.targetBox(stub(0));
+  const wlr_box secondAfter = fixture.layout.targetBox(stub(1));
+  CHECK_EQ(firstAfter.width, firstBefore.width + 80);
+  CHECK_EQ(secondAfter.width, secondBefore.width);
+  CHECK_EQ(secondAfter.x, boundary + 40);
+  CHECK_NEAR(
+      firstAfter.x - fixture.config.edgePad, kUsable.width - fixture.config.edgePad - secondAfter.x - secondAfter.width,
+      1
+  );
+}
+
+UMBRIEL_TEST(endAlignedUnderfullLeftwardResizeKeepsTheRightEdgeFixed) {
+  Fixture fixture;
+  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::End;
+  fixture.addColumns(1);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box before = fixture.layout.targetBox(stub(0));
+  auto resize = fixture.layout.beginResize(stub(0), WLR_EDGE_LEFT, kUsable);
+  CHECK(resize != nullptr);
+  resize->applyDelta(-100.0, 0.0, kUsable);
+  fixture.layout.arrange(kUsable);
+
+  const wlr_box after = fixture.layout.targetBox(stub(0));
+  CHECK_EQ(after.x + after.width, before.x + before.width);
+  CHECK_EQ(after.x, before.x - 100);
+  CHECK_EQ(after.width, before.width + 100);
+  CHECK_EQ(fixture.layout.scroll(), 0.0);
 }
 
 UMBRIEL_TEST(widthFractionsAreClamped) {
@@ -1117,13 +1316,15 @@ UMBRIEL_TEST(onOverflowJudgesTheSurvivorOfAClosedColumnAgainstItsReplacement) {
   CHECK(fixture.layout.centeredRest());
 }
 
-// Removing the focused column can leave a lone survivor, which has no pair left to overflow against. It rests at the
-// strip start, so center_underfull_strip alone decides whether it ends up centered or flush left.
-UMBRIEL_TEST(onOverflowRestsTheLoneSurvivorOfARemovedColumnAtTheStripStart) {
-  for (const bool centerUnderfullStrip : {false, true}) {
+// Removing the focused column can leave a lone survivor, which has no pair left to overflow against. Focus centering
+// leaves it at the strip start, so underfull_strip alone decides where it comes to rest.
+UMBRIEL_TEST(onOverflowRestsTheLoneSurvivorOfARemovedColumnWhereTheAlignmentPutsIt) {
+  for (const auto& [align, rest] :
+       {std::pair{UnderfullStripAlign::Start, 0}, std::pair{UnderfullStripAlign::Center, 280},
+        std::pair{UnderfullStripAlign::End, 560}}) {
     Fixture fixture;
     fixture.config.scrolling.centerFocused = CenterFocusedColumn::OnOverflow;
-    fixture.config.scrolling.centerUnderfullStrip = centerUnderfullStrip;
+    fixture.config.scrolling.underfullStrip = align;
     fixture.addColumns(2);
     for (int column = 0; column < 2; ++column) {
       CHECK(fixture.layout.setWidthFromPixels(column, kViewport, 700));
@@ -1140,7 +1341,7 @@ UMBRIEL_TEST(onOverflowRestsTheLoneSurvivorOfARemovedColumnAtTheStripStart) {
     fixture.layout.reevaluateAfterRemoval(0, kViewport);
     CHECK_EQ(fixture.layout.scroll(), 0.0);
     CHECK(!fixture.layout.centeredRest());
-    CHECK_EQ(fixture.layout.columnX(0, kViewport), centerUnderfullStrip ? 280 : 0);
+    CHECK_EQ(fixture.layout.columnX(0, kViewport), rest);
   }
 }
 
@@ -1785,9 +1986,9 @@ UMBRIEL_TEST(verticalArrangeShiftsLanesByTheScrollOffset) {
   CHECK_EQ(scrolled.y, unscrolled.y - 100);
 }
 
-UMBRIEL_TEST(verticalFirstLaneTopEdgeStaysFixedWithoutCentering) {
+UMBRIEL_TEST(verticalFirstLaneTopEdgeStaysFixedOnAStartAlignedStrip) {
   Fixture fixture(ScrollingDirection::Vertical);
-  fixture.config.scrolling.centerUnderfullStrip = false;
+  fixture.config.scrolling.underfullStrip = UnderfullStripAlign::Start;
   fixture.addColumns(1);
   const uint32_t edges = fixture.layout.sanitizeResizeEdges(stub(0), WLR_EDGE_TOP | WLR_EDGE_LEFT);
   CHECK_EQ(edges & WLR_EDGE_TOP, uint32_t{0});
