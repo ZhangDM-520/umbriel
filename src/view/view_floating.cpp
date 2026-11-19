@@ -8,6 +8,7 @@
 #include "scene/effect_registry.h"
 #include "scene/surface_blur.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -441,6 +442,7 @@ namespace umbriel {
     const bool pointerResize = !m_tiled && cursor != nullptr && cursor->isResizingView(this);
     m_xwaylandResizeConfigurePending = pointerResize && m_xsurface != nullptr;
     const uint32_t serial = configureSize(width, height);
+    resizeTrace::configure("floating", width, height, serial);
     m_floating.recordSizeRequest(width, height, serial);
     m_floatingSizeConfigure = FloatingSizeConfigure{
         .size = {width, height},

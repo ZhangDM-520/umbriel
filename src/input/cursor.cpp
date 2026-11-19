@@ -20,6 +20,7 @@
 #include "scene/quit_confirm.h"
 #include "scene/ssd_frame.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/size_hints.h"
 #include "view/view.h"
 // clang-format off
@@ -3513,6 +3514,10 @@ namespace umbriel {
     }
 
     grab->view->resizeFloating(newRight - newLeft, newBottom - newTop);
+    resizeTrace::step(
+        "floating", grab->edges, m_cursor->x, m_cursor->y, grab->view->presentedBox(),
+        wlr_box{newLeft, newTop, newRight - newLeft, newBottom - newTop}
+    );
   }
 
   void Cursor::revealClickedTile(View* view) {
@@ -3897,12 +3902,14 @@ namespace umbriel {
     const bool lockstep = animation.windowsResize.waitsForClient(animation.enabled);
     if (lockstep && grab->workspace->layoutMotionWaiting()) {
       grab->deferred = true;
+      resizeTrace::deferred("tiled");
       return;
     }
     grab->deferred = false;
     const wlr_box usable = grab->workspace->tiledArea();
     grab->session->applyDelta(m_cursor->x - grab->startX, m_cursor->y - grab->startY, usable);
     grab->view->setMaximizedState(false);
+    grab->tracePending = true;
     grab->workspace->markArrange(lockstep);
   }
 
@@ -3910,6 +3917,25 @@ namespace umbriel {
     const auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
     if (grab != nullptr && grab->workspace == workspace && grab->deferred) {
       processResizeTile();
+    }
+  }
+
+  void Cursor::traceTiledResizeStep(const Workspace* workspace) {
+    auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
+    if (grab == nullptr || !grab->tracePending || grab->workspace != workspace || grab->view == nullptr) {
+      return;
+    }
+    grab->tracePending = false;
+    // Recorded after Workspace::arrange() updates presentation so drawn mirrors what the compositor just committed.
+    resizeTrace::step(
+        "tiled", grab->edges, m_cursor->x, m_cursor->y, grab->view->presentedBox(),
+        grab->workspace->presentedTiledBox(grab->view)
+    );
+  }
+
+  void Cursor::clearPendingTiledTrace(const Workspace* workspace) {
+    if (auto* grab = std::get_if<TiledResizeGrab>(&m_grab); grab != nullptr && grab->workspace == workspace) {
+      grab->tracePending = false;
     }
   }
 

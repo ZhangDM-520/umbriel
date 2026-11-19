@@ -400,6 +400,12 @@ check_config_watch() {
   fi
 }
 
+# The resize-lag trace writes one JSON line per resize step, configure and client commit. It costs a file open per
+# record, so only a check that reads it opts in, with `# harness: resize-trace=true`.
+check_resize_trace() {
+  sed -n '2,12p' "$CHECKS_DIR/$1.sh" | grep -q '^# harness: resize-trace=true' && echo 1 || echo 0
+}
+
 check_xcursor_theme() {
   if sed -n '2,12p' "$CHECKS_DIR/$1.sh" | grep -q '^# harness: xcursor-theme=true'; then
     echo umbriel-harness
@@ -510,6 +516,7 @@ start_instance() {
   local cursor_theme=$3
   local xwayland_proxy=$4
   local config_watch=$5
+  local resize_trace=$6
   # sockaddr_un caps paths at 108 bytes and the compositor appends
   # "/umbriel-wayland-0.sock" (23) to XDG_RUNTIME_DIR, so keep the root short. A
   # long path makes wl_display_add_socket fail and the boot abort.
@@ -526,6 +533,14 @@ start_instance() {
     fi
   fi
   write_default_config "$config" "$xwayland" "$cursor_theme"
+  # The trace is per instance: a check reads the file the compositor appended to, and an opted-out check leaves the
+  # variable unset so the emitter never opens it.
+  if [[ $resize_trace == 1 ]]; then
+    export UMBRIEL_RESIZE_TRACE="$RUNTIME_DIR/resize-trace.jsonl"
+    : > "$UMBRIEL_RESIZE_TRACE"
+  else
+    unset UMBRIEL_RESIZE_TRACE
+  fi
   local xwayland_environment=()
   if [[ $xwayland_proxy == association ]]; then
     local real_xwayland
@@ -725,7 +740,7 @@ run_one() {
 
   BOOT_ERROR=
   if ! start_instance "$(check_outputs "$name")" "$(check_xwayland "$name")" "$cursor_theme" \
-    "$(check_xwayland_proxy "$name")" "$(check_config_watch "$name")"; then
+    "$(check_xwayland_proxy "$name")" "$(check_config_watch "$name")" "$(check_resize_trace "$name")"; then
     publish "$prefix" 1 "$check_start" "$BOOT_ERROR"
     return 0
   fi

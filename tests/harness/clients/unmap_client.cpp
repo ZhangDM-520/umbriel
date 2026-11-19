@@ -37,10 +37,13 @@
 // and prints "resize-pending <width>x<height>" until an `r` on stdin acknowledges it, redraws at that size, and prints
 // "resized <width>x<height>", the way a slow client lags its tile.
 // RESIZE_STEP=<px> follows a configure at its size rounded down to a multiple of px, the way a cell-sized terminal
-// does. GEOMETRY_AHEAD, with RESIZE_ON_STDIN, acknowledges that configure at once and commits the new window geometry
-// over its old buffer, the way a client whose frames are presented from another thread can; `r` then redraws at that
-// size. LOG_SUSPENDED binds xdg-shell at version 6 and prints "suspended" and "resumed" whenever the toplevel's
-// suspended state changes.
+// does, committing ack_configure without attaching a new buffer when the snapped size is unchanged.
+// RESIZE_DELAY_MS=<ms> waits that many milliseconds after mapping before acknowledging and redrawing a configure,
+// coalescing intermediate configures that arrive during the delay. LOG_RESIZES prints "resized <w>x<h>" or
+// "ack-same <w>x<h>" after mapped configure commits. GEOMETRY_AHEAD, with RESIZE_ON_STDIN, acknowledges that configure
+// at once and commits the new window geometry over its old buffer, the way a client whose frames are presented from
+// another thread can; `r` then redraws at that size. LOG_SUSPENDED binds xdg-shell at version 6 and prints
+// "suspended" and "resumed" whenever the toplevel's suspended state changes.
 
 #include "color-management-v1-client-protocol.h"
 #include "content-type-v1-client-protocol.h"
@@ -58,6 +61,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <optional>
 #include <poll.h>
 #include <print>
@@ -145,9 +149,13 @@ namespace {
     bool suspended = false;
     xdg_toplevel* parentOnFirstConfigure = nullptr;
     bool followConfigures = false;
+    bool logResizes = false;
     bool resizeOnStdin = false;
     bool geometryAhead = false;
     int resizeStep = 1;
+    int resizeDelayMs = 0;
+    std::optional<uint32_t> delayedResizeSerial;
+    int64_t delayedResizeDueMs = 0;
     bool pendingResizeAcked = false;
     std::optional<uint32_t> pendingResizeSerial;
     bool requestFullscreen = false;
@@ -469,6 +477,12 @@ namespace {
   void exportedHandle(void*, zxdg_exported_v2*, const char* handle) { std::println("exported handle={}", handle); }
   constexpr zxdg_exported_v2_listener kExportedListener = {.handle = exportedHandle};
 
+  int64_t monotonicMs() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (static_cast<int64_t>(ts.tv_sec) * 1000) + (static_cast<int64_t>(ts.tv_nsec) / 1'000'000);
+  }
+
   void xdgSurfaceConfigure(void* data, xdg_surface* xdgSurface, uint32_t serial) {
     auto& state = *static_cast<State*>(data);
     const bool followSize = (state.resizeFillColor || (state.followConfigures && state.mapped))
@@ -487,26 +501,58 @@ namespace {
       std::fflush(stdout);
       return;
     }
+    if (state.mapped && state.resizeDelayMs > 0 && (followSize || state.delayedResizeSerial)) {
+      if (!state.delayedResizeSerial) {
+        state.delayedResizeDueMs = monotonicMs() + state.resizeDelayMs;
+      }
+      state.delayedResizeSerial = serial;
+      return;
+    }
     if (!std::exchange(state.pendingResizeAcked, false)) {
       xdg_surface_ack_configure(xdgSurface, serial);
     }
-    if (followSize) {
+    const int targetWidth = followSize
+        ? std::max(state.resizeStep, state.configuredWidth / state.resizeStep * state.resizeStep)
+        : state.width;
+    const int targetHeight = followSize
+        ? std::max(state.resizeStep, state.configuredHeight / state.resizeStep * state.resizeStep)
+        : state.height;
+    const bool bufferSizeChanged = followSize && (targetWidth != state.width || targetHeight != state.height);
+    Buffer nextBuffer;
+    if (bufferSizeChanged) {
       if (state.mapped && state.resizeFillColor) {
         state.fillColor = *state.resizeFillColor;
       }
-      state.width = std::max(state.resizeStep, state.configuredWidth / state.resizeStep * state.resizeStep);
-      state.height = std::max(state.resizeStep, state.configuredHeight / state.resizeStep * state.resizeStep);
-      state.buffer = createBuffer(state, state.width, state.height);
+      state.width = targetWidth;
+      state.height = targetHeight;
+      nextBuffer = createBuffer(state, state.width, state.height);
+      if (nextBuffer.resource == nullptr) {
+        std::println(stderr, "unmap-client: failed to allocate resized shared-memory buffer");
+        std::exit(EXIT_FAILURE);
+      }
     }
     if (state.mapped) {
-      if (followSize) {
-        wl_surface_attach(state.surface, state.buffer.resource, 0, 0);
+      if (bufferSizeChanged) {
+        wl_surface_attach(state.surface, nextBuffer.resource, 0, 0);
         wl_surface_damage_buffer(state.surface, 0, 0, state.width, state.height);
       }
       // Apply later toplevel state transitions, such as leaving fullscreen. Acknowledging the configure without a
       // surface commit leaves the requested state pending forever.
       wl_surface_commit(state.surface);
+      if (bufferSizeChanged) {
+        destroyBuffer(state.buffer);
+        state.buffer = nextBuffer;
+      }
+      if (state.logResizes && followSize) {
+        wl_display_flush(state.display);
+        std::println("{} {}x{}", bufferSizeChanged ? "resized" : "ack-same", state.width, state.height);
+        std::fflush(stdout);
+      }
       return;
+    }
+    if (bufferSizeChanged) {
+      destroyBuffer(state.buffer);
+      state.buffer = nextBuffer;
     }
     if (state.closed) {
       return;
@@ -624,6 +670,9 @@ namespace {
     }
     state.mapped = false;
     state.closed = true;
+    state.delayedResizeSerial.reset();
+    state.pendingResizeSerial.reset();
+    state.pendingResizeAcked = false;
     // Attaching a null buffer unmaps the surface; the toplevel stays alive.
     wl_surface_attach(state.surface, nullptr, 0, 0);
     wl_surface_commit(state.surface);
@@ -902,6 +951,7 @@ int main(int argc, char** argv) {
   state.logSuspended = std::getenv("LOG_SUSPENDED") != nullptr;
   state.logWmCapabilities = std::getenv("LOG_WM_CAPABILITIES") != nullptr;
   state.followConfigures = std::getenv("FOLLOW_CONFIGURES") != nullptr;
+  state.logResizes = std::getenv("LOG_RESIZES") != nullptr;
   state.resizeOnStdin = std::getenv("RESIZE_ON_STDIN") != nullptr;
   state.geometryAhead = std::getenv("GEOMETRY_AHEAD") != nullptr;
   if (const char* step = std::getenv("RESIZE_STEP")) {
@@ -911,6 +961,14 @@ int main(int argc, char** argv) {
       return EXIT_FAILURE;
     }
     state.resizeStep = (*parsed)[0];
+  }
+  if (const char* delay = std::getenv("RESIZE_DELAY_MS")) {
+    const auto parsed = harness::parseInts<int, 1>(delay, ',');
+    if (!parsed || (*parsed)[0] < 0) {
+      std::println(stderr, "unmap-client: RESIZE_DELAY_MS must be a non-negative integer");
+      return EXIT_FAILURE;
+    }
+    state.resizeDelayMs = (*parsed)[0];
   }
   state.requestFullscreen = std::getenv("REQUEST_FULLSCREEN") != nullptr;
   state.requestHdr = std::getenv("COLOR_HDR") != nullptr;
@@ -1239,7 +1297,8 @@ int main(int argc, char** argv) {
   }
   wl_surface_commit(state.surface);
 
-  if (!remapOnStdin && !updateOnStdin && !dialogOnStdin && !nestedOnStdin && !foreignParentOnStdin) {
+  const bool watchStdin = remapOnStdin || updateOnStdin || dialogOnStdin || nestedOnStdin || foreignParentOnStdin;
+  if (!watchStdin && state.resizeDelayMs == 0) {
     while (wl_display_dispatch(state.display) >= 0) {
     }
   } else {
@@ -1248,20 +1307,33 @@ int main(int argc, char** argv) {
         {.fd = wl_display_get_fd(state.display), .events = POLLIN, .revents = 0},
         {.fd = STDIN_FILENO, .events = POLLIN, .revents = 0},
     };
+    const nfds_t sourceCount = watchStdin ? 2 : 1;
     while (wl_display_dispatch_pending(state.display) >= 0) {
+      if (state.delayedResizeSerial && monotonicMs() >= state.delayedResizeDueMs) {
+        const uint32_t serial = *std::exchange(state.delayedResizeSerial, std::nullopt);
+        const int delay = std::exchange(state.resizeDelayMs, 0);
+        xdgSurfaceConfigure(&state, state.xdgSurface, serial);
+        state.resizeDelayMs = delay;
+        continue;
+      }
       wl_display_flush(state.display);
+      int timeoutMs = -1;
+      if (state.delayedResizeSerial) {
+        timeoutMs = static_cast<int>(std::max<int64_t>(0, state.delayedResizeDueMs - monotonicMs()));
+      }
       int ready = 0;
       do {
-        ready = poll(sources, 2, -1);
+        ready = poll(sources, sourceCount, timeoutMs);
       } while (ready < 0 && errno == EINTR);
       if (ready < 0 || (sources[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
         break;
       }
-      if ((sources[1].revents & POLLIN) != 0) {
+      if (watchStdin && sources[1].fd >= 0 && (sources[1].revents & POLLIN) != 0) {
         // A stdin handler's roundtrip can drain this POLLIN's events; dispatching stale readiness blocks forever.
         sources[0].revents = 0;
         char command = 0;
-        if (read(STDIN_FILENO, &command, 1) > 0) {
+        const ssize_t bytesRead = read(STDIN_FILENO, &command, 1);
+        if (bytesRead > 0) {
           if (repaintOnStdin && state.mapped && (command == 'R' || command == 'G' || command == 'B')) {
             state.repaintColor = command == 'R' ? 0xFFFF0000 : command == 'G' ? 0xFF00FF00 : 0xFF0000FF;
             if (state.repaintFrame == nullptr) {
@@ -1273,11 +1345,15 @@ int main(int argc, char** argv) {
             const uint32_t serial = *state.pendingResizeSerial;
             state.pendingResizeSerial.reset();
             state.resizeOnStdin = false;
+            const int delay = std::exchange(state.resizeDelayMs, 0);
             xdgSurfaceConfigure(&state, state.xdgSurface, serial);
+            state.resizeDelayMs = delay;
             state.resizeOnStdin = true;
-            wl_display_flush(state.display);
-            std::println("resized {}x{}", state.width, state.height);
-            std::fflush(stdout);
+            if (!state.logResizes) {
+              wl_display_flush(state.display);
+              std::println("resized {}x{}", state.width, state.height);
+              std::fflush(stdout);
+            }
           } else if (command == 'a') {
             if (!activateFromFile(state, state.activationTokenFile)) {
               return EXIT_FAILURE;
@@ -1402,7 +1478,11 @@ int main(int argc, char** argv) {
           } else if (!state.mapped && remapOnStdin) {
             queueRemap(state);
           }
+        } else if (bytesRead == 0 || (bytesRead < 0 && errno != EINTR && errno != EAGAIN)) {
+          sources[1].fd = -1;
         }
+      } else if (watchStdin && sources[1].fd >= 0 && (sources[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        sources[1].fd = -1;
       }
       if ((sources[0].revents & POLLIN) != 0 && wl_display_dispatch(state.display) < 0) {
         break;

@@ -11,6 +11,7 @@
 #include "scene/surface_blur.h"
 #include "server/color_manager.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -693,6 +694,7 @@ namespace umbriel {
             ? ClientSize{.width = surface->current.width, .height = surface->current.height}
             : ClientSize{},
     };
+    resizeTrace::configure("tiled", width, height, m_tiledSizeRequest->serial);
   }
 
   bool View::settleTiledSizeRequest() {
