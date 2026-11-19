@@ -47,6 +47,7 @@ enabled = true
 curve = "spring:1,800"
 dim = 0.8
 blur = false
+blur_strength = 1.0
 
 [animation.dialogs]
 enabled = true
@@ -85,7 +86,7 @@ Each event other than `windows_drag` also accepts `enabled`, `duration_ms`, and 
 | `[animation.windows_opacity]` | none, and no `effect`                                               | Focus changes to window-rule opacity and backdrop blur     |
 | `[animation.workspaces]`      | `style`                                                             | Workspace switching                                        |
 | `[animation.overview]`        | `workspace_curve`                                                   | Overview opening, closing, and filmstrip movement          |
-| `[animation.scratchpad]`      | `dim`, `blur`                                                       | Scratchpad show and hide, and its backdrop                 |
+| `[animation.scratchpad]`      | `dim`, `blur`, `blur_strength`                                      | Scratchpad show and hide, and its backdrop                 |
 | `[animation.dialogs]`         | `dim`, and no `effect`                                              | Shade over a window while a modal dialog is attached to it |
 | `[animation.border]`          | none                                                                | Focus-border color                                         |
 | `[animation.dim_unfocused]`   | `dim`                                                               | Unfocused-window opacity                                   |
@@ -108,7 +109,7 @@ When a tiled window closes while `windows_out` is disabled, its last frame stays
 
 `animation.overview.workspace_curve` controls filmstrip movement after wheel, keyboard, and touchpad navigation. A released touchpad gesture keeps the speed the fingers had when its curve is a spring: `[animation.workspaces]` for the three-finger switch, `[animation.overview]` for the four-finger open and close, and `workspace_curve` for the filmstrip. Any other curve starts from rest.
 
-Scratchpad `dim` and `blur` remain active without a fade when animation is disabled. `dim` is the opacity of the black layer over the output behind a visible scratchpad; `blur` blurs it when `[appearance.blur]` is enabled.
+Scratchpad `dim` and `blur` remain active without a fade when animation is disabled. `dim` is the opacity of the black layer over the output behind a visible scratchpad; `blur` blurs it when `[appearance.blur]` is enabled, and `blur_strength` scales that blur from 0.0 to 1.0, where 1.0 is the renderer's base strength. The fade moves blur alpha alone, so strength holds steady through a show or hide unless you set it yourself.
 
 Dialogs `dim` works the same way: it is the opacity, 0.0 to 1.0 and `0.3` by default, of the black shade over a window while a modal dialog is attached to it (see [Dialogs](layout.md#dialogs)). The shade fades in when the dialog attaches and out when it leaves, and stays without a fade when animation is disabled.
 
