@@ -508,6 +508,66 @@ static bool test_renderer_destroy(struct fixture* fixture) {
   return ok;
 }
 
+static struct wlr_swapchain* create_swapchain(struct fixture* fixture) {
+  const struct wlr_drm_format* format = get_render_format(fixture, DRM_FORMAT_ARGB8888);
+  return format != NULL ? wlr_swapchain_create(fixture->allocator, TEST_WIDTH, TEST_HEIGHT, format) : NULL;
+}
+
+// Builds a frame on `swapchain`, which outlives the frame so buffer age limits
+// render damage, and acknowledges its damage as a commit would. The caller
+// unlocks the returned buffer and finishes `state`.
+static struct wlr_buffer* render_frame_pending(
+    struct wlr_scene_output* scene_output, struct wlr_swapchain* swapchain, bool capture_pending,
+    struct wlr_output_state* state
+) {
+  wlr_output_state_init(state);
+  struct wlr_scene_output_state_options options = {.swapchain = swapchain, .effect_capture_pending = capture_pending};
+  if (!wlr_scene_output_build_state(scene_output, state, &options) || state->buffer == NULL) {
+    return NULL;
+  }
+  wlr_scene_output_acknowledge_damage_for_test(scene_output, state);
+  return wlr_buffer_lock(state->buffer);
+}
+
+static struct wlr_buffer*
+render_frame(struct wlr_scene_output* scene_output, struct wlr_swapchain* swapchain, struct wlr_output_state* state) {
+  return render_frame_pending(scene_output, swapchain, false, state);
+}
+
+// One whole-damage frame per swapchain buffer, so the next frame carries only its own damage.
+static bool warm_up(struct wlr_scene_output* scene_output, struct wlr_swapchain* swapchain) {
+  bool ok = true;
+  for (int i = 0; i < 4; i++) {
+    wlr_scene_output_damage_whole_for_test(scene_output);
+    struct wlr_output_state state;
+    struct wlr_buffer* buffer = render_frame(scene_output, swapchain, &state);
+    ok &= buffer != NULL;
+    if (buffer != NULL) {
+      wlr_buffer_unlock(buffer);
+    }
+    wlr_output_state_finish(&state);
+  }
+  return check(ok, "warm-up frames render");
+}
+
+// Renders one frame (on `swapchain` when given, else a fresh one), releases it and
+// leaves the output's effect buffers in `buffers`.
+static bool commit_frame(
+    struct fixture* fixture, struct wlr_scene_output* scene_output, struct wlr_swapchain* swapchain,
+    const char* message, struct fx_offscreen_buffers** buffers
+) {
+  struct wlr_output_state state;
+  struct wlr_buffer* buffer = swapchain != NULL ? render_frame(scene_output, swapchain, &state)
+                                                : fixture_render_scene(fixture, scene_output, &state);
+  const bool ok = check(buffer != NULL, message);
+  if (buffer != NULL) {
+    wlr_buffer_unlock(buffer);
+  }
+  wlr_output_state_finish(&state);
+  *buffers = fx_offscreen_buffers_try_get(fixture->output);
+  return ok;
+}
+
 // A persistent slot on one node must not disturb an unrelated node's culling
 // and must draw only inside its own bounds. Layout (16x16 output):
 //   background: opaque blue rect covering everything
@@ -567,6 +627,366 @@ static bool test_persistent_scene(struct fixture* fixture) {
       captured != NULL && captured->output.in_place_source != NULL && captured->output.animation_buffers[0] == NULL,
       "the in-place window slot copies its target without a capture"
   );
+
+  // A transient open/close animation alongside a persistent in-place window slot
+  // allocates animation_buffers[0] while active, and trims animation_buffers[0]
+  // on the first settled frame without dropping in_place_source.
+  struct fx_effect_shader* transient = fx_effect_shader_create(
+      fixture->renderer, FX_EFFECT_ANIMATION, "vec4 animation(vec2 uv) { return umbriel_sample(uv); }",
+      "persistent-scene-transient"
+  );
+  ok &= check(transient != NULL, "transient program compiles");
+  struct fx_animation_parameters transient_params = {
+      .progress = 0.5f, .linear_progress = 0.5f, .direction = 1, .transition_id = 1
+  };
+  wlr_scene_node_set_animation(&bystander->node, FX_SLOT_WINDOWS_IN, transient, &transient_params);
+  ok &= commit_frame(fixture, scene_output, NULL, "scene renders with transient + persistent slots", &captured);
+  ok &= check(
+      captured != NULL && captured->output.animation_buffers[0] != NULL && captured->output.in_place_source != NULL,
+      "transient animation allocates animation_buffers[0] alongside in_place_source"
+  );
+
+  wlr_scene_node_set_animation(&bystander->node, FX_SLOT_WINDOWS_IN, NULL, NULL);
+  ok &= commit_frame(fixture, scene_output, NULL, "scene renders after transient slot settles", &captured);
+  ok &= check(
+      captured != NULL && captured->output.animation_buffers[0] == NULL && captured->output.in_place_source != NULL,
+      "settling transient animation trims animation_buffers[0] while keeping in_place_source"
+  );
+  fx_effect_shader_unref(transient);
+
+  // A persistent border slot sitting above an in-place window slot must keep
+  // both in_place_source and animation_buffers[0] across frames with no pending
+  // capture, then trim animation_buffers[0] once the border slot goes away.
+  struct fx_effect_shader* border_shader = fx_effect_shader_create(
+      fixture->renderer, FX_EFFECT_BORDER, "vec4 border(vec2 uv) { return vec4(1.0, 0.0, 0.0, 1.0); }",
+      "persistent-scene-border"
+  );
+  ok &= check(border_shader != NULL, "border program compiles");
+  struct wlr_scene_rect* border_node = wlr_scene_rect_create(&scene->tree, 4, 4, white);
+  wlr_scene_node_set_position(&border_node->node, 6, 6);
+  wlr_scene_node_raise_to_top(&border_node->node);
+  wlr_scene_node_set_animation(&border_node->node, FX_SLOT_BORDER_EFFECT, border_shader, &parameters);
+  struct fx_framebuffer* saved_in_place = NULL;
+  struct fx_framebuffer* saved_anim0 = NULL;
+  for (int frame = 0; frame < 2; ++frame) {
+    ok &=
+        commit_frame(fixture, scene_output, NULL, "scene renders with border and in-place persistent slots", &captured);
+    if (frame == 0) {
+      ok &= check(
+          captured != NULL && captured->output.in_place_source != NULL && captured->output.animation_buffers[0] != NULL,
+          "border and in-place persistent slots allocate both buffers"
+      );
+      if (captured != NULL) {
+        saved_in_place = captured->output.in_place_source;
+        saved_anim0 = captured->output.animation_buffers[0];
+      }
+    } else {
+      ok &= check(
+          captured != NULL
+              && captured->output.in_place_source == saved_in_place
+              && captured->output.animation_buffers[0] == saved_anim0,
+          "second frame with border above in-place reuses both buffers without thrash"
+      );
+    }
+  }
+  wlr_scene_node_destroy(&border_node->node);
+  fx_effect_shader_unref(border_shader);
+  {
+    ok &= commit_frame(fixture, scene_output, NULL, "scene renders after border persistent slot removed", &captured);
+    ok &= check(
+        captured != NULL
+            && captured->output.animation_buffers[0] == NULL
+            && captured->output.in_place_source == saved_in_place,
+        "removing border slot trims animation_buffers[0] while keeping in_place_source"
+    );
+  }
+
+  // A shadowed persistent window slot allocates animation_buffers[0] and
+  // animation_shadow_blur, reuses them across frames without thrash, and trims
+  // both once the shadow is removed.
+  const float shadow_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  struct wlr_scene_shadow* shadow = wlr_scene_shadow_create(&scene->tree, 8, 8, 0, 2.0f, shadow_color);
+  ok &= check(shadow != NULL, "persistent shadow allocates");
+  if (shadow != NULL) {
+    wlr_scene_node_set_position(&shadow->node, 0, 0);
+    wlr_scene_node_place_below(&shadow->node, &effect->node);
+    wlr_scene_shadow_set_animation_source(shadow, &effect->node, shadow_color);
+    struct fx_framebuffer* saved_shadow_blur = NULL;
+    saved_anim0 = NULL;
+    for (int frame = 0; frame < 2; ++frame) {
+      ok &= commit_frame(fixture, scene_output, NULL, "scene renders with shadowed persistent window", &captured);
+      if (frame == 0) {
+        ok &= check(
+            captured != NULL
+                && captured->output.animation_buffers[0] != NULL
+                && captured->output.animation_shadow_blur != NULL
+                && captured->output.in_place_source == saved_in_place,
+            "shadowed persistent slot keeps animation_buffers[0], animation_shadow_blur, and in_place_source"
+        );
+        if (captured != NULL) {
+          saved_anim0 = captured->output.animation_buffers[0];
+          saved_shadow_blur = captured->output.animation_shadow_blur;
+        }
+      } else {
+        ok &= check(
+            captured != NULL
+                && captured->output.animation_buffers[0] == saved_anim0
+                && captured->output.animation_shadow_blur == saved_shadow_blur
+                && captured->output.in_place_source == saved_in_place,
+            "second frame with shadowed persistent window reuses shadow buffers without thrash"
+        );
+      }
+    }
+    wlr_scene_node_destroy(&shadow->node);
+    ok &= commit_frame(fixture, scene_output, NULL, "scene renders after persistent shadow removed", &captured);
+    ok &= check(
+        captured != NULL
+            && captured->output.animation_buffers[0] == NULL
+            && captured->output.animation_shadow_blur == NULL
+            && captured->output.in_place_source == saved_in_place,
+        "removing shadow trims caster and shadow blur buffers while keeping in_place_source"
+    );
+  }
+
+  // Unrelated partial damage that misses the persistent effect node must not
+  // trim its in_place_source, while settling a bounded transient slot alongside
+  // an undamaged persistent window slot trims animation_buffers[0] immediately.
+  struct wlr_swapchain* swapchain = create_swapchain(fixture);
+  if (check(swapchain != NULL && warm_up(scene_output, swapchain), "warm up persistent partial-damage swapchain")) {
+    captured = fx_offscreen_buffers_try_get(fixture->output);
+    saved_in_place = captured != NULL ? captured->output.in_place_source : NULL;
+    ok &= check(saved_in_place != NULL, "warmed swapchain retains in_place_source");
+    wlr_scene_rect_set_color(bystander, white);
+    ok &= commit_frame(fixture, scene_output, swapchain, "unrelated partial-damage frame renders", &captured);
+    ok &= check(
+        captured != NULL && captured->output.in_place_source == saved_in_place,
+        "unrelated partial damage preserves persistent in_place_source"
+    );
+    wlr_scene_rect_set_color(bystander, red);
+
+    struct fx_effect_shader* bounded = fx_effect_shader_create(
+        fixture->renderer, FX_EFFECT_ANIMATION, "vec4 animation(vec2 uv) { return umbriel_sample(uv); }",
+        "persistent-scene-bounded"
+    );
+    ok &= check(bounded != NULL, "bounded program compiles");
+    if (bounded != NULL) {
+      fx_effect_shader_set_bounded(bounded, true);
+      wlr_scene_node_set_animation(&bystander->node, FX_SLOT_WINDOWS_IN, bounded, &transient_params);
+      ok &=
+          commit_frame(fixture, scene_output, swapchain, "bounded transient + undamaged persistent renders", &captured);
+      ok &= check(
+          captured != NULL
+              && captured->output.animation_buffers[0] != NULL
+              && captured->output.in_place_source == saved_in_place,
+          "bounded slot allocates animation_buffers[0] alongside persistent in_place_source"
+      );
+
+      wlr_scene_node_set_animation(&bystander->node, FX_SLOT_WINDOWS_IN, NULL, NULL);
+      ok &= commit_frame(
+          fixture, scene_output, swapchain, "settled bounded slot alongside undamaged persistent renders", &captured
+      );
+      ok &= check(
+          captured != NULL
+              && captured->output.animation_buffers[0] == NULL
+              && captured->output.in_place_source == saved_in_place,
+          "settling bounded slot trims animation_buffers[0] despite undamaged persistent slot"
+      );
+      fx_effect_shader_unref(bounded);
+    }
+
+    // Nested undamaged persistent captures and a shadowed child inside a
+    // shape-preserving undamaged persistent capture must both retain
+    // animation_buffers[1] when unrelated partial damage occurs elsewhere.
+    struct fx_effect_shader* nested_border = fx_effect_shader_create(
+        fixture->renderer, FX_EFFECT_BORDER, "vec4 border(vec2 uv) { return vec4(1.0, 0.0, 0.0, 1.0); }",
+        "persistent-scene-nested-border"
+    );
+    struct fx_effect_shader* child_win = fx_effect_shader_create(
+        fixture->renderer, FX_EFFECT_WINDOW, "vec4 window(vec2 uv) { return umbriel_sample(uv + vec2(0.01, 0.0)); }",
+        "persistent-scene-child-win"
+    );
+    struct wlr_scene_tree* outer = wlr_scene_tree_create(&scene->tree);
+    struct wlr_scene_tree* inner = outer != NULL ? wlr_scene_tree_create(outer) : NULL;
+    struct wlr_scene_rect* inner_rect = inner != NULL ? wlr_scene_rect_create(inner, 4, 4, red) : NULL;
+    ok &= check(
+        nested_border != NULL && child_win != NULL && outer != NULL && inner != NULL && inner_rect != NULL,
+        "allocate nested persistent capture test nodes"
+    );
+    if (nested_border != NULL && child_win != NULL && outer != NULL && inner != NULL) {
+      wlr_scene_node_set_position(&outer->node, 2, 2);
+      wlr_scene_node_set_animation(&outer->node, FX_SLOT_BORDER_EFFECT, nested_border, &parameters);
+      wlr_scene_node_set_animation(&inner->node, FX_SLOT_BORDER_EFFECT, nested_border, &parameters);
+      ok &= warm_up(scene_output, swapchain);
+      captured = fx_offscreen_buffers_try_get(fixture->output);
+      saved_anim0 = captured != NULL ? captured->output.animation_buffers[0] : NULL;
+      struct fx_framebuffer* saved_anim1 = captured != NULL ? captured->output.animation_buffers[1] : NULL;
+      ok &= check(
+          saved_anim0 != NULL && saved_anim1 != NULL && captured->output.in_place_source == saved_in_place,
+          "nested persistent captures allocate animation_buffers[0..1]"
+      );
+
+      wlr_scene_rect_set_color(bystander, white);
+      ok &= commit_frame(
+          fixture, scene_output, swapchain, "unrelated partial damage with nested persistent captures renders",
+          &captured
+      );
+      ok &= check(
+          captured != NULL
+              && captured->output.animation_buffers[0] == saved_anim0
+              && captured->output.animation_buffers[1] == saved_anim1
+              && captured->output.in_place_source == saved_in_place,
+          "unrelated partial damage preserves nested persistent animation_buffers[0..1]"
+      );
+      wlr_scene_rect_set_color(bystander, red);
+
+      // Replace inner's border slot with a !shape_preserving persistent window slot shadowed
+      // by a sibling shadow under outer (whose border shader is marked shape_preserving).
+      wlr_scene_node_set_animation(&inner->node, FX_SLOT_BORDER_EFFECT, NULL, NULL);
+      fx_effect_shader_set_shape_preserving(nested_border, true);
+      wlr_scene_node_set_animation(&inner->node, FX_SLOT_WINDOW, child_win, &parameters);
+      struct wlr_scene_shadow* nested_shadow = wlr_scene_shadow_create(outer, 4, 4, 0, 2.0f, shadow_color);
+      ok &= check(nested_shadow != NULL, "allocate shadowed child under persistent capture");
+      if (nested_shadow != NULL) {
+        wlr_scene_node_place_below(&nested_shadow->node, &inner->node);
+        wlr_scene_shadow_set_animation_source(nested_shadow, &inner->node, shadow_color);
+        ok &= warm_up(scene_output, swapchain);
+        captured = fx_offscreen_buffers_try_get(fixture->output);
+        saved_anim0 = captured != NULL ? captured->output.animation_buffers[0] : NULL;
+        saved_anim1 = captured != NULL ? captured->output.animation_buffers[1] : NULL;
+        struct fx_framebuffer* saved_shadow_blur = captured != NULL ? captured->output.animation_shadow_blur : NULL;
+        ok &= check(
+            saved_anim0 != NULL && saved_anim1 != NULL && saved_shadow_blur != NULL,
+            "shadowed child under persistent capture allocates animation_buffers[0..1] and animation_shadow_blur"
+        );
+
+        wlr_scene_rect_set_color(bystander, white);
+        ok &= commit_frame(
+            fixture, scene_output, swapchain, "unrelated partial damage with shadowed persistent subtree renders",
+            &captured
+        );
+        ok &= check(
+            captured != NULL
+                && captured->output.animation_buffers[0] == saved_anim0
+                && captured->output.animation_buffers[1] == saved_anim1
+                && captured->output.animation_shadow_blur == saved_shadow_blur
+                && captured->output.in_place_source == saved_in_place,
+            "unrelated partial damage preserves shadowed nested persistent animation_buffers[0..1]"
+        );
+        wlr_scene_rect_set_color(bystander, red);
+      }
+      wlr_scene_node_destroy(&outer->node);
+      ok &= commit_frame(fixture, scene_output, swapchain, "render after nested persistent subtree removed", &captured);
+      ok &= check(
+          captured != NULL
+              && captured->output.animation_buffers[0] == NULL
+              && captured->output.animation_buffers[1] == NULL
+              && captured->output.animation_shadow_blur == NULL
+              && captured->output.in_place_source == saved_in_place,
+          "removing nested persistent subtree trims animation_buffers[0..1] and shadow blur"
+      );
+    }
+    // A shadow caster capture reused for a !in_place, !shape_preserving persistent source
+    // keeps the source's nested animation_buffers[0..1] across unrelated partial damage.
+    struct fx_effect_shader* reuse_border = fx_effect_shader_create(
+        fixture->renderer, FX_EFFECT_BORDER, "vec4 border(vec2 uv) { return vec4(0.0, 1.0, 0.0, 1.0); }",
+        "persistent-scene-reuse-border"
+    );
+    struct wlr_scene_tree* reuse_src = wlr_scene_tree_create(&scene->tree);
+    struct wlr_scene_tree* reuse_child = reuse_src != NULL ? wlr_scene_tree_create(reuse_src) : NULL;
+    struct wlr_scene_rect* reuse_rect = reuse_child != NULL ? wlr_scene_rect_create(reuse_child, 4, 4, red) : NULL;
+    struct wlr_scene_shadow* reuse_shadow = wlr_scene_shadow_create(&scene->tree, 4, 4, 0, 2.0f, shadow_color);
+    ok &= check(
+        reuse_border != NULL && reuse_child != NULL && reuse_rect != NULL && reuse_shadow != NULL,
+        "allocate reusable shadow caster test nodes"
+    );
+    if (reuse_border != NULL && reuse_child != NULL && reuse_shadow != NULL) {
+      wlr_scene_node_set_position(&reuse_src->node, 2, 2);
+      wlr_scene_node_set_position(&reuse_shadow->node, 2, 2);
+      wlr_scene_node_set_animation(&reuse_src->node, FX_SLOT_BORDER_EFFECT, reuse_border, &parameters);
+      wlr_scene_node_set_animation(&reuse_child->node, FX_SLOT_BORDER_EFFECT, reuse_border, &parameters);
+      wlr_scene_node_place_below(&reuse_shadow->node, &reuse_src->node);
+      wlr_scene_shadow_set_animation_source(reuse_shadow, &reuse_src->node, shadow_color);
+      ok &= warm_up(scene_output, swapchain);
+      captured = fx_offscreen_buffers_try_get(fixture->output);
+      saved_anim0 = captured != NULL ? captured->output.animation_buffers[0] : NULL;
+      struct fx_framebuffer* reuse_anim1 = captured != NULL ? captured->output.animation_buffers[1] : NULL;
+      ok &= check(
+          saved_anim0 != NULL && reuse_anim1 != NULL, "reusable shadow caster source allocates animation_buffers[0..1]"
+      );
+      wlr_scene_rect_set_color(bystander, white);
+      ok &= commit_frame(
+          fixture, scene_output, swapchain, "unrelated partial damage with reused shadow caster renders", &captured
+      );
+      ok &= check(
+          captured != NULL
+              && captured->output.animation_buffers[0] == saved_anim0
+              && captured->output.animation_buffers[1] == reuse_anim1,
+          "unrelated partial damage preserves animation_buffers[0..1] of a reused shadow caster"
+      );
+      wlr_scene_rect_set_color(bystander, red);
+      wlr_scene_node_destroy(&reuse_shadow->node);
+      wlr_scene_node_destroy(&reuse_src->node);
+    }
+    fx_effect_shader_unref(reuse_border);
+    fx_effect_shader_unref(nested_border);
+    fx_effect_shader_unref(child_win);
+  }
+  wlr_swapchain_destroy(swapchain);
+
+  // A captured persistent border tree containing a live blur allocates
+  // animation_backdrop, reuses it across frames, and trims it once the blur is removed.
+  {
+    wlr_scene_set_blur_data(scene, 1, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f);
+    struct fx_effect_shader* backdrop_border = fx_effect_shader_create(
+        fixture->renderer, FX_EFFECT_BORDER, "vec4 border(vec2 uv) { return vec4(1.0, 0.0, 0.0, 1.0); }",
+        "persistent-scene-backdrop"
+    );
+    struct wlr_scene_tree* backdrop_tree = wlr_scene_tree_create(&scene->tree);
+    struct wlr_scene_rect* inner_rect = backdrop_tree != NULL ? wlr_scene_rect_create(backdrop_tree, 4, 4, red) : NULL;
+    struct wlr_scene_blur* inner_blur = backdrop_tree != NULL ? wlr_scene_blur_create(backdrop_tree, 4, 4) : NULL;
+    ok &= check(backdrop_border != NULL && inner_rect != NULL && inner_blur != NULL, "create backdrop trim test nodes");
+    if (backdrop_border != NULL && backdrop_tree != NULL) {
+      wlr_scene_node_set_position(&backdrop_tree->node, 6, 6);
+      wlr_scene_node_set_animation(&backdrop_tree->node, FX_SLOT_BORDER_EFFECT, backdrop_border, &parameters);
+      struct fx_framebuffer* saved_backdrop = NULL;
+      for (int frame = 0; frame < 2; ++frame) {
+        ok &=
+            commit_frame(fixture, scene_output, NULL, "scene renders captured persistent border with blur", &captured);
+        if (frame == 0) {
+          ok &= check(
+              captured != NULL
+                  && captured->output.animation_backdrop != NULL
+                  && captured->output.animation_buffers[0] != NULL
+                  && captured->output.in_place_source == saved_in_place,
+              "captured persistent blur allocates animation_backdrop"
+          );
+          if (captured != NULL) {
+            saved_backdrop = captured->output.animation_backdrop;
+          }
+        } else {
+          ok &= check(
+              captured != NULL
+                  && captured->output.animation_backdrop == saved_backdrop
+                  && captured->output.in_place_source == saved_in_place,
+              "second frame reuses animation_backdrop without thrash"
+          );
+        }
+      }
+      wlr_scene_node_destroy(&inner_blur->node);
+      ok &= commit_frame(
+          fixture, scene_output, NULL, "scene renders after blur inside persistent capture removed", &captured
+      );
+      ok &= check(
+          captured != NULL
+              && captured->output.animation_backdrop == NULL
+              && captured->output.animation_buffers[0] != NULL
+              && captured->output.in_place_source == saved_in_place,
+          "removing blur from persistent capture trims animation_backdrop while keeping capture and in_place_source"
+      );
+      wlr_scene_node_destroy(&backdrop_tree->node);
+      fx_effect_shader_unref(backdrop_border);
+    }
+  }
 
   // With the slot removed nothing keeps the scene's effect list: the next
   // render must not re-add offscreen buffers (a second render succeeds and the
@@ -645,32 +1065,6 @@ static bool test_occlusion(struct fixture* fixture) {
   return ok;
 }
 
-static struct wlr_swapchain* create_swapchain(struct fixture* fixture) {
-  const struct wlr_drm_format* format = get_render_format(fixture, DRM_FORMAT_ARGB8888);
-  return format != NULL ? wlr_swapchain_create(fixture->allocator, TEST_WIDTH, TEST_HEIGHT, format) : NULL;
-}
-
-// Builds a frame on `swapchain`, which outlives the frame so buffer age limits
-// render damage, and acknowledges its damage as a commit would. The caller
-// unlocks the returned buffer and finishes `state`.
-static struct wlr_buffer* render_frame_pending(
-    struct wlr_scene_output* scene_output, struct wlr_swapchain* swapchain, bool capture_pending,
-    struct wlr_output_state* state
-) {
-  wlr_output_state_init(state);
-  struct wlr_scene_output_state_options options = {.swapchain = swapchain, .effect_capture_pending = capture_pending};
-  if (!wlr_scene_output_build_state(scene_output, state, &options) || state->buffer == NULL) {
-    return NULL;
-  }
-  wlr_scene_output_acknowledge_damage_for_test(scene_output, state);
-  return wlr_buffer_lock(state->buffer);
-}
-
-static struct wlr_buffer*
-render_frame(struct wlr_scene_output* scene_output, struct wlr_swapchain* swapchain, struct wlr_output_state* state) {
-  return render_frame_pending(scene_output, swapchain, false, state);
-}
-
 // Moving a node must replace its old pixels even when the scene background
 // has alpha. Keep the swapchain alive and verify that the target is reused.
 static bool test_background_clear(struct fixture* fixture) {
@@ -739,22 +1133,6 @@ static bool test_background_clear(struct fixture* fixture) {
     wlr_scene_node_destroy(&scene->tree.node);
   }
   return ok;
-}
-
-// One whole-damage frame per swapchain buffer, so the next frame carries only its own damage.
-static bool warm_up(struct wlr_scene_output* scene_output, struct wlr_swapchain* swapchain) {
-  bool ok = true;
-  for (int i = 0; i < 4; i++) {
-    wlr_scene_output_damage_whole_for_test(scene_output);
-    struct wlr_output_state state;
-    struct wlr_buffer* buffer = render_frame(scene_output, swapchain, &state);
-    ok &= buffer != NULL;
-    if (buffer != NULL) {
-      wlr_buffer_unlock(buffer);
-    }
-    wlr_output_state_finish(&state);
-  }
-  return check(ok, "warm-up frames render");
 }
 
 // Renders one frame and checks its commit damage extents against (x1,y1)-(x2,y2), x2/y2 exclusive.
