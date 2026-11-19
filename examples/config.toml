@@ -474,6 +474,7 @@ action = "overview-open"
 # [animation.windows_resize]
 # enabled = false
 # wait_for_redraw = true
+# physics = false
 
 # Optional live workspace reveal (see docs/user/animation.md).
 # Add the bundled effects/animation/workspace_wipe/effect.toml to your includes.

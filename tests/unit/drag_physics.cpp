@@ -397,4 +397,121 @@ UMBRIEL_TEST(theQuietWindowDoesNotCreditMovingTimeAsQuiet) {
   CHECK(physics.maxDisplacement() == 0.0F);
 }
 
+UMBRIEL_TEST(resizePinAnchorsTheOppositeEdgeAndCentresUnfedAxes) {
+  using Edge = DragPhysics::ResizeEdge;
+  const auto checkPin = [](Edge edges, float expectedU, float expectedV) {
+    const auto pin = DragPhysics::resizePin(edges);
+    CHECK_EQ(pin[0], expectedU);
+    CHECK_EQ(pin[1], expectedV);
+  };
+  checkPin(Edge::Left, 1.0F, 0.5F);
+  checkPin(Edge::Right, 0.0F, 0.5F);
+  checkPin(Edge::Top, 0.5F, 1.0F);
+  checkPin(Edge::Bottom, 0.5F, 0.0F);
+  checkPin(Edge::Left | Edge::Top, 1.0F, 1.0F);
+  checkPin(Edge::Right | Edge::Bottom, 0.0F, 0.0F);
+  checkPin(Edge::None, 0.5F, 0.5F);
+}
+
+UMBRIEL_TEST(resizeFeedGatesUnfedAxesAndInertZeroGrowth) {
+  using Edge = DragPhysics::ResizeEdge;
+
+  // Zero growth leaves the grabbed sheet inactive and at rest.
+  DragPhysics inert;
+  const auto cornerPin = DragPhysics::resizePin(Edge::Right | Edge::Bottom);
+  inert.begin(400, 300, cornerPin[0], cornerPin[1], 1);
+  inert.moveResize(0.0F, 0.0F, Edge::Right | Edge::Bottom);
+  CHECK(!inert.active());
+  CHECK(inert.maxDisplacement() == 0.0F);
+
+  // Horizontal-only grab ignores dh completely.
+  DragPhysics horizontal;
+  const auto rightPin = DragPhysics::resizePin(Edge::Right);
+  horizontal.begin(400, 300, rightPin[0], rightPin[1], 2);
+  horizontal.moveResize(40.0F, 30.0F, Edge::Right);
+  CHECK(horizontal.active());
+  const auto hMid = horizontal.displacementAt(0.5F, 0.5F);
+  const auto hCorner = horizontal.displacementAt(1.0F, 1.0F);
+  CHECK_EQ(hMid[1], 0.0F);
+  CHECK_EQ(hCorner[1], 0.0F);
+
+  // Vertical-only grab ignores dw completely.
+  DragPhysics vertical;
+  const auto bottomPin = DragPhysics::resizePin(Edge::Bottom);
+  vertical.begin(400, 300, bottomPin[0], bottomPin[1], 3);
+  vertical.moveResize(40.0F, 30.0F, Edge::Bottom);
+  CHECK(vertical.active());
+  const auto vMid = vertical.displacementAt(0.5F, 0.5F);
+  const auto vCorner = vertical.displacementAt(1.0F, 1.0F);
+  CHECK_EQ(vMid[0], 0.0F);
+  CHECK_EQ(vCorner[0], 0.0F);
+
+  // Opposing-edge bitmasks keep the same Left/Top precedence as resizePin().
+  DragPhysics opposingX;
+  const auto opposingXPin = DragPhysics::resizePin(Edge::Left | Edge::Right);
+  CHECK_EQ(opposingXPin[0], 1.0F);
+  opposingX.begin(400, 300, opposingXPin[0], opposingXPin[1], 4);
+  opposingX.moveResize(40.0F, 0.0F, Edge::Left | Edge::Right);
+  const auto opposingXFar = opposingX.displacementAt(0.0F, 0.5F);
+  CHECK(opposingXFar[0] > 5.0F);
+
+  DragPhysics opposingY;
+  const auto opposingYPin = DragPhysics::resizePin(Edge::Top | Edge::Bottom);
+  CHECK_EQ(opposingYPin[1], 1.0F);
+  opposingY.begin(400, 300, opposingYPin[0], opposingYPin[1], 5);
+  opposingY.moveResize(0.0F, 40.0F, Edge::Top | Edge::Bottom);
+  const auto opposingYFar = opposingY.displacementAt(0.5F, 0.0F);
+  CHECK(opposingYFar[1] > 5.0F);
+}
+
+UMBRIEL_TEST(resizeFeedTrailsInsideTheDraggedEdgeAndSettlesAfterRelease) {
+  using Edge = DragPhysics::ResizeEdge;
+  // Growing the Right edge feeds +dw, loading negative X displacement at u = 1 so the drawn edge lags behind the
+  // growth inside the new box until the sheet springs outward on settle.
+  DragPhysics right;
+  const auto rightPin = DragPhysics::resizePin(Edge::Right);
+  right.begin(400, 300, rightPin[0], rightPin[1], 1);
+  right.moveResize(40.0F, 0.0F, Edge::Right);
+  const auto rightPinned = right.displacementAt(rightPin[0], rightPin[1]);
+  const auto rightMid = right.displacementAt(0.5F, 0.5F);
+  CHECK_NEAR(rightPinned[0], 0.0F, 1e-4F);
+  CHECK_EQ(rightPinned[1], 0.0F);
+  CHECK_EQ(rightMid[1], 0.0F);
+  const float rightTrail = right.displacementAt(1.0F, 0.5F)[0];
+  CHECK(rightTrail < -5.0F);
+  CHECK(std::abs(rightTrail) <= right.displacementBound() + 1e-3F);
+  CHECK(right.maxDisplacement() <= right.displacementBound() + 1e-3F);
+
+  DragPhysics left;
+  const auto leftPin = DragPhysics::resizePin(Edge::Left);
+  left.begin(400, 300, leftPin[0], leftPin[1], 2);
+  left.moveResize(40.0F, 0.0F, Edge::Left);
+  const auto leftPinned = left.displacementAt(leftPin[0], leftPin[1]);
+  CHECK_NEAR(leftPinned[0], 0.0F, 1e-4F);
+  const float leftTrail = left.displacementAt(0.0F, 0.5F)[0];
+  CHECK(leftTrail > 5.0F);
+  CHECK(leftTrail * rightTrail < 0.0F);
+
+  // Refitting while settling preserves contraction and non-folding, and re-pinning holds the anchored edge.
+  right.tick(1.0 / 60);
+  right.release();
+  right.tick(1.0 / 60);
+  CHECK(right.active());
+  right.resize(500, 350, rightPin[0], rightPin[1]);
+  CHECK(contracts(right, 500, 350));
+  CHECK(unfolded(right, 500, 350));
+  right.begin(500, 350, rightPin[0], rightPin[1], 3);
+  const auto repinned = right.displacementAt(rightPin[0], rightPin[1]);
+  CHECK_NEAR(repinned[0], 0.0F, 0.05F);
+  CHECK(contracts(right, 500, 350));
+  CHECK(unfolded(right, 500, 350));
+
+  // Releasing decays back to rest.
+  right.release();
+  run(right, 2.5, 1.0 / 120);
+  CHECK(!right.active());
+  CHECK(!right.grabbed());
+  CHECK(right.maxDisplacement() == 0.0F);
+}
+
 int main() { return RUN_TESTS(); }

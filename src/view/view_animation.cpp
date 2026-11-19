@@ -29,6 +29,23 @@ extern "C" {
 namespace umbriel {
   namespace {
     constexpr Logger kLog("view");
+
+    DragPhysics::ResizeEdge toResizeEdges(uint32_t edges) {
+      DragPhysics::ResizeEdge result = DragPhysics::ResizeEdge::None;
+      if ((edges & WLR_EDGE_TOP) != 0) {
+        result = result | DragPhysics::ResizeEdge::Top;
+      }
+      if ((edges & WLR_EDGE_BOTTOM) != 0) {
+        result = result | DragPhysics::ResizeEdge::Bottom;
+      }
+      if ((edges & WLR_EDGE_LEFT) != 0) {
+        result = result | DragPhysics::ResizeEdge::Left;
+      }
+      if ((edges & WLR_EDGE_RIGHT) != 0) {
+        result = result | DragPhysics::ResizeEdge::Right;
+      }
+      return result;
+    }
   } // namespace
 
   using view_detail::toplevelSurfaceTreeNode;
@@ -418,11 +435,24 @@ namespace umbriel {
     raiseToTop();
   }
 
+  DragPhysics::Tuning View::dragTuning() const {
+    const auto& drag = config().animation.windowsDrag;
+    return DragPhysics::Tuning{
+        .stiffness = static_cast<float>(drag.stiffness),
+        .damping = static_cast<float>(drag.damping),
+        .coupling = static_cast<float>(drag.coupling),
+        .pointerResponse = static_cast<float>(drag.pointerResponse),
+        .maxDisplacementPx = static_cast<float>(drag.maxDisplacementPx),
+        .settleAfterPauseS = drag.settleAfterPauseS,
+    };
+  }
+
   bool View::beginDragPhysics(double localX, double localY) {
     // Null while animations or physics are off, or when the program failed to compile: the window stays rigid.
-    if (effectRegistry().deformationShader() == nullptr) {
+    if (effectRegistry().deformationShader() == nullptr || !config().animation.windowsDrag.physics) {
       return false;
     }
+    m_dragResizeEdges = DragPhysics::ResizeEdge::None;
     m_dragGrabX = localX;
     m_dragGrabY = localY;
     const std::optional<DragFit> fit = dragPhysicsFit();
@@ -430,18 +460,31 @@ namespace umbriel {
       return false;
     }
     m_dragBounds = fit->bounds;
-    const auto& drag = config().animation.windowsDrag;
     m_dragPhysics.begin(
         static_cast<float>(fit->bounds.width), static_cast<float>(fit->bounds.height), fit->grab[0], fit->grab[1],
-        m_dragPhysics.active() ? m_dragPhysics.transitionId() : nextAnimationTransitionId(),
-        DragPhysics::Tuning{
-            .stiffness = static_cast<float>(drag.stiffness),
-            .damping = static_cast<float>(drag.damping),
-            .coupling = static_cast<float>(drag.coupling),
-            .pointerResponse = static_cast<float>(drag.pointerResponse),
-            .maxDisplacementPx = static_cast<float>(drag.maxDisplacementPx),
-            .settleAfterPauseS = drag.settleAfterPauseS,
-        }
+        m_dragPhysics.active() ? m_dragPhysics.transitionId() : nextAnimationTransitionId(), dragTuning()
+    );
+    return true;
+  }
+
+  bool View::beginResizePhysics(uint32_t edges) {
+    if (effectRegistry().deformationShader() == nullptr || !config().animation.windowsResize.physics) {
+      return false;
+    }
+    const DragPhysics::ResizeEdge resizeEdges = toResizeEdges(edges);
+    if (resizeEdges == DragPhysics::ResizeEdge::None) {
+      return false;
+    }
+    const std::optional<wlr_box> bounds = dragPhysicsBounds();
+    if (!bounds) {
+      return false;
+    }
+    m_dragBounds = *bounds;
+    m_dragResizeEdges = resizeEdges;
+    const std::array<float, 2> pin = DragPhysics::resizePin(resizeEdges);
+    m_dragPhysics.begin(
+        static_cast<float>(bounds->width), static_cast<float>(bounds->height), pin[0], pin[1],
+        m_dragPhysics.active() ? m_dragPhysics.transitionId() : nextAnimationTransitionId(), dragTuning()
     );
     return true;
   }
@@ -456,6 +499,15 @@ namespace umbriel {
     if (!m_dragPhysics.grabbed() && !m_dragPhysics.active()) {
       return;
     }
+    if (!m_dragPhysics.grabbed()) {
+      const std::optional<wlr_box> bounds = dragPhysicsBounds();
+      if (!bounds || wlr_box_equal(&*bounds, &m_dragBounds)) {
+        return;
+      }
+      m_dragBounds = *bounds;
+      m_dragPhysics.resize(static_cast<float>(bounds->width), static_cast<float>(bounds->height), 0.5F, 0.5F);
+      return;
+    }
     const std::optional<DragFit> fit = dragPhysicsFit();
     if (!fit || (!grabMoved && wlr_box_equal(&fit->bounds, &m_dragBounds))) {
       return;
@@ -467,17 +519,43 @@ namespace umbriel {
     );
   }
 
-  std::optional<View::DragFit> View::dragPhysicsFit() const {
+  void View::stepResizePhysics() {
+    if (!m_dragPhysics.grabbed() || m_dragResizeEdges == DragPhysics::ResizeEdge::None) {
+      return;
+    }
+    const std::optional<wlr_box> bounds = dragPhysicsBounds();
+    if (!bounds || wlr_box_equal(&*bounds, &m_dragBounds)) {
+      return;
+    }
+    const auto dw = static_cast<float>(bounds->width - m_dragBounds.width);
+    const auto dh = static_cast<float>(bounds->height - m_dragBounds.height);
+    m_dragBounds = *bounds;
+    const std::array<float, 2> pin = DragPhysics::resizePin(m_dragResizeEdges);
+    m_dragPhysics.resize(static_cast<float>(bounds->width), static_cast<float>(bounds->height), pin[0], pin[1]);
+    const bool wasActive = m_dragPhysics.active();
+    m_dragPhysics.moveResize(dw, dh, m_dragResizeEdges);
+    wakeDragPhysics(wasActive);
+  }
+
+  std::optional<wlr_box> View::dragPhysicsBounds() const {
     wlr_box bounds{};
     if (!wlr_scene_node_effect_bounds(&m_contentTree->node, &bounds)) {
       return std::nullopt;
     }
+    return bounds;
+  }
+
+  std::optional<View::DragFit> View::dragPhysicsFit() const {
+    const std::optional<wlr_box> bounds = dragPhysicsBounds();
+    if (!bounds) {
+      return std::nullopt;
+    }
     // The bounds are content-tree-local; the grab is frame-local.
     const auto grab = DragPhysics::grabIn(
-        static_cast<float>(bounds.x), static_cast<float>(bounds.y), static_cast<float>(bounds.width),
-        static_cast<float>(bounds.height), m_dragGrabX - m_contentTree->node.x, m_dragGrabY - m_contentTree->node.y
+        static_cast<float>(bounds->x), static_cast<float>(bounds->y), static_cast<float>(bounds->width),
+        static_cast<float>(bounds->height), m_dragGrabX - m_contentTree->node.x, m_dragGrabY - m_contentTree->node.y
     );
-    return DragFit{.bounds = bounds, .grab = grab};
+    return DragFit{.bounds = *bounds, .grab = grab};
   }
 
   bool View::dragPhysicsOn(const Output* output) const {
@@ -498,22 +576,53 @@ namespace umbriel {
 
   int View::dragPhysicsExpand() const { return static_cast<int>(std::ceil(m_dragPhysics.displacementBound())) + 2; }
 
+  bool View::dragPhysicsEnabled() const {
+    const bool resizeGrab = m_dragResizeEdges != DragPhysics::ResizeEdge::None;
+    const bool modeEnabled = !m_dragPhysics.grabbed()
+        || (resizeGrab ? config().animation.windowsResize.physics : config().animation.windowsDrag.physics);
+    return effectRegistry().deformationShader() != nullptr && modeEnabled;
+  }
+
+  void View::resetDragPhysics() {
+    m_dragPhysics = DragPhysics{};
+    m_dragResizeEdges = DragPhysics::ResizeEdge::None;
+    if (m_dragSlotBound && m_contentTree != nullptr) {
+      wlr_scene_node_set_animation(&m_contentTree->node, FX_SLOT_DRAG, nullptr, nullptr);
+      m_dragSlotBound = false;
+    }
+  }
+
+  void View::wakeDragPhysics(bool wasActive) {
+    if (!m_dragPhysics.active()) {
+      return;
+    }
+    if (!wasActive) {
+      // Integration starts at the motion that wakes the sheet.
+      m_dragPhysicsMsec = static_cast<double>(m_server->animationClockMsec());
+    }
+    scheduleFrame();
+  }
+
   void View::moveDragPhysics(double dx, double dy) {
     if (!m_dragPhysics.grabbed()) {
       return;
     }
     const bool wasActive = m_dragPhysics.active();
     m_dragPhysics.move(static_cast<float>(dx), static_cast<float>(dy));
-    if (m_dragPhysics.active()) {
-      if (!wasActive) {
-        // Integration starts at the motion that wakes the sheet.
-        m_dragPhysicsMsec = static_cast<double>(m_server->animationClockMsec());
-      }
-      scheduleFrame();
-    }
+    wakeDragPhysics(wasActive);
   }
 
   void View::endDragPhysics() { m_dragPhysics.release(); }
+
+  void View::endResizePhysics() {
+    if (!dragPhysicsEnabled()) {
+      resetDragPhysics();
+      return;
+    }
+    stepResizePhysics();
+    m_dragPhysics.release();
+    m_dragResizeEdges = DragPhysics::ResizeEdge::None;
+  }
 
   void View::restoreHomePresentation() {
     // The drag derived its own presented size and crop; drop them so the
@@ -848,6 +957,9 @@ namespace umbriel {
     } else {
       bindAnimationEffect(&target->node, AnimationEvent::WindowsMove, m_presentation.animation());
     }
+    if (ownTrees && (m_dragPhysics.active() || m_dragPhysics.grabbed()) && !dragPhysicsEnabled()) {
+      resetDragPhysics();
+    }
     // Only the view's own content tree deforms; overview cards stay rigid.
     if (ownTrees && m_dragPhysics.active()) {
       fx_animation_parameters parameters{};
@@ -1029,19 +1141,25 @@ namespace umbriel {
       active = active || m_borderColorAnim.animating() || m_outerBorderColorAnim.animating();
     }
     if (m_dragPhysics.active() || m_dragPhysics.grabbed()) {
-      if (effectRegistry().deformationShader() == nullptr) {
+      if (!dragPhysicsEnabled()) {
         // Without the program (physics turned off), the window stays rigid for the rest of the drag.
-        m_dragPhysics = DragPhysics{};
-      } else if (m_dragPhysics.active()) {
-        fitDragPhysics(false);
-        // The vblank a frame ticks from can precede the instant the sheet woke, so a step never runs backwards.
-        const double elapsed = std::max(0.0, nowMsec - m_dragPhysicsMsec);
-        m_dragPhysicsMsec = std::max(m_dragPhysicsMsec, nowMsec);
-        // The stall guard compares against the output's refresh period; 0 when the output reports none.
-        const Output* output = currentOutput();
-        const int refreshMhz = output != nullptr ? output->wlr()->refresh : 0;
-        const double cadenceS = refreshMhz > 0 ? 1000.0 / refreshMhz : 0.0;
-        active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
+        resetDragPhysics();
+      } else {
+        if (m_dragResizeEdges != DragPhysics::ResizeEdge::None) {
+          stepResizePhysics();
+        } else {
+          fitDragPhysics(false);
+        }
+        if (m_dragPhysics.active()) {
+          // The vblank a frame ticks from can precede the instant the sheet woke, so a step never runs backwards.
+          const double elapsed = std::max(0.0, nowMsec - m_dragPhysicsMsec);
+          m_dragPhysicsMsec = std::max(m_dragPhysicsMsec, nowMsec);
+          // The stall guard compares against the output's refresh period; 0 when the output reports none.
+          const Output* output = currentOutput();
+          const int refreshMhz = output != nullptr ? output->wlr()->refresh : 0;
+          const double cadenceS = refreshMhz > 0 ? 1000.0 / refreshMhz : 0.0;
+          active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
+        }
       }
     }
     if (openingFinished) {

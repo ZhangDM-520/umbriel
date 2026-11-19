@@ -81,7 +81,7 @@ Each event other than `windows_drag` also accepts `enabled`, `duration_ms`, and 
 | `[animation.windows_in]`      | `style`, `scale`                                                    | Window opening                                             |
 | `[animation.windows_out]`     | `style`, `scale`                                                    | Window closing                                             |
 | `[animation.windows_move]`    | none                                                                | Position during moves, reflow, maximize, and restore       |
-| `[animation.windows_resize]`  | `wait_for_redraw`, and no `effect`                                  | Size during the same changes                               |
+| `[animation.windows_resize]`  | `wait_for_redraw`, `physics`, and no `effect`                       | Size during the same changes                               |
 | `[animation.windows_opacity]` | none, and no `effect`                                               | Focus changes to window-rule opacity and backdrop blur     |
 | `[animation.workspaces]`      | `style`                                                             | Workspace switching                                        |
 | `[animation.overview]`        | `workspace_curve`                                                   | Overview opening, closing, and filmstrip movement          |
@@ -222,6 +222,8 @@ The tuning keys shape the sheet; out-of-range values are clamped to their range 
 | `settle_after_pause_s` | 0.25    | 0.1 to 5.0     | Rendering pause after which the sheet snaps back to rest. Ordinary frames never trigger it at any refresh rate. |
 
 Only the window's own content deforms; its drop shadow follows that deformation within the window's shadow bounds. Re-grabbing a window while it settles continues its motion. Under the default `popin` style, or under `zoom`, the closing snapshot's clip grows by the deformation margin, so a client-side decoration extending past the window's geometry can remain visible within that margin while the snapshot fades.
+
+Setting `physics = true` under `[animation.windows_resize]` (default `false`) applies the same elastic sheet to floating pointer resizes (tiled resizes stay rigid). It pins the edge or corner opposite the grabbed edge, loads the sheet from each committed size step of the window so the dragged edge trails the growth and relaxes after release, shares the tuning keys under `[animation.windows_drag]`, and runs whenever `[animation] enabled` is true—even if `[animation.windows_resize] enabled = false` (which governs layout-driven size animations).
 
 ## Workspace reveal
 

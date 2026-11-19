@@ -6,7 +6,7 @@
 namespace umbriel {
   namespace {
     // The sheet's spring model is tuned through DragPhysics::Tuning
-    // ([animation.windows_drag]); only the integration and stability
+    // ([animation.windows_drag], shared with [animation.windows_resize]); only the integration and stability
     // constants live here.
     constexpr double kStep = 1.0 / 240.0;
     // Below these the sheet reads as at rest, and settling ends the frame stream.
@@ -37,6 +37,10 @@ namespace umbriel {
         largest = std::max({largest, std::abs(point[0]), std::abs(point[1])});
       }
       return largest;
+    }
+
+    constexpr bool hasEdge(DragPhysics::ResizeEdge edges, DragPhysics::ResizeEdge bit) {
+      return (edges & bit) != DragPhysics::ResizeEdge::None;
     }
   } // namespace
 
@@ -77,6 +81,12 @@ namespace umbriel {
     m_height = height;
     setGrab(grabX, grabY);
     constrain();
+  }
+
+  std::array<float, 2> DragPhysics::resizePin(ResizeEdge edges) {
+    const float u = hasEdge(edges, ResizeEdge::Left) ? 1.0F : (hasEdge(edges, ResizeEdge::Right) ? 0.0F : 0.5F);
+    const float v = hasEdge(edges, ResizeEdge::Top) ? 1.0F : (hasEdge(edges, ResizeEdge::Bottom) ? 0.0F : 0.5F);
+    return {u, v};
   }
 
   std::array<float, 2>
@@ -177,6 +187,15 @@ namespace umbriel {
     }
     constrain();
     m_active = true;
+  }
+
+  void DragPhysics::moveResize(float dw, float dh, ResizeEdge edges) {
+    if (!std::isfinite(dw) || !std::isfinite(dh)) {
+      return;
+    }
+    const float dx = hasEdge(edges, ResizeEdge::Left) ? -dw : (hasEdge(edges, ResizeEdge::Right) ? dw : 0.0F);
+    const float dy = hasEdge(edges, ResizeEdge::Top) ? -dh : (hasEdge(edges, ResizeEdge::Bottom) ? dh : 0.0F);
+    move(dx * kResizeResponse, dy * kResizeResponse);
   }
 
   void DragPhysics::release() {

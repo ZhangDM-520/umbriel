@@ -904,6 +904,10 @@ namespace umbriel {
       for (View* view : sortedEffectViews()) {
         view->applyDynamicRules();
       }
+    } else if (effects.animation && !effects.viewChrome) {
+      for (View* view : sortedEffectViews()) {
+        view->syncAnimationEffects();
+      }
     }
     if (effects.animation && m_scratchpadManager != nullptr) {
       m_scratchpadManager->applyConfig();

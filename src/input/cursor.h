@@ -90,6 +90,8 @@ namespace umbriel {
       int geometryWidth = 0;
       int geometryHeight = 0;
       uint32_t edges = 0;
+      // The view's drag physics took the resize grab.
+      bool physics = false;
     };
     struct TiledResizeGrab {
       View* view = nullptr;

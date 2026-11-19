@@ -77,6 +77,7 @@ namespace umbriel {
         && height == box->height) {
       return true;
     }
+    cancelResizeGrab();
     if (!m_region) {
       m_regionRestoreBox = m_hasMaximizeRestoreBox
           ? m_maximizeRestoreBox
@@ -98,7 +99,10 @@ namespace umbriel {
     return true;
   }
 
-  void View::clearRegionState() {
+  void View::clearRegionState(bool keepResizeGrab) {
+    if (!keepResizeGrab) {
+      cancelResizeGrab();
+    }
     if (m_region) {
       m_server->scheduleIpcWindowsEvent();
     }
@@ -137,7 +141,7 @@ namespace umbriel {
       clearRegionState();
       return;
     }
-    if (!canUseRegionGeometry() || scheduledMaximized() || m_server->cursor()->isDraggingView(this)) {
+    if (!canUseRegionGeometry() || scheduledMaximized() || sizeGrabActive()) {
       return;
     }
     const auto box = floatingRegionBox(*m_region, floatingUsableArea());

@@ -70,6 +70,10 @@ vec4 animation(vec2 uv) {
                   && settings.windowsOut.style != "slide"));
     }
 
+    bool deformationEnabled(const Config::Animation& settings) {
+      return settings.enabled && (settings.windowsDrag.physics || settings.windowsResize.physics);
+    }
+
     fx_effect_kind toFxKind(EffectKind kind) {
       switch (kind) {
       case EffectKind::Animation:
@@ -267,16 +271,16 @@ vec4 animation(vec2 uv) {
     } else if (!fadeNeeded) {
       m_builtinFade.reset();
     }
-    if (!settings.animation.enabled || !settings.animation.windowsDrag.physics) {
+    if (!deformationEnabled(settings.animation)) {
       dropDeformation();
     } else if (!m_deformationCompiled) {
       m_deformationCompiled = true;
       m_deformation = {
-          fx_effect_shader_create(m_renderer, FX_EFFECT_ANIMATION, kDeformation, "animation.windows_drag"),
+          fx_effect_shader_create(m_renderer, FX_EFFECT_ANIMATION, kDeformation, "animation.deformation"),
           fx_effect_shader_unref
       };
       if (m_deformation == nullptr) {
-        kLog.error("the drag physics program failed to compile; dragged windows stay rigid");
+        kLog.error("the drag physics program failed to compile; dragged or resized windows stay rigid");
       }
     }
     syncLightLayer();
@@ -396,8 +400,7 @@ vec4 animation(vec2 uv) {
   }
 
   fx_effect_shader* EffectRegistry::deformationShader() const {
-    const Config::Animation& settings = config().animation;
-    return settings.enabled && settings.windowsDrag.physics ? m_deformation.get() : nullptr;
+    return deformationEnabled(config().animation) ? m_deformation.get() : nullptr;
   }
 
   const EffectPreset* EffectRegistry::animationPreset(AnimationEvent event) const {

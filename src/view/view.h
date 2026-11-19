@@ -420,7 +420,7 @@ namespace umbriel {
     // A pointer drop can preserve its normal restore origin without moving the frame away from the release point.
     bool setRegion(WindowRegion region, std::optional<FloatingPoint> restoreOrigin = std::nullopt);
     void clearRegion(bool animate = true);
-    void clearRegionState();
+    void clearRegionState(bool keepResizeGrab = false);
     void refitFloatingRegion();
     // The usable area an opening window is sized against: the target output's,
     // then its full layout box, then whatever sits under the cursor. A hotplug
@@ -754,16 +754,27 @@ namespace umbriel {
     // sheet keeps settling after the release. False when the sheet did not take the grab (physics off, or nothing
     // drawn); the drag then makes none of the calls below.
     [[nodiscard]] bool beginDragPhysics(double localX, double localY);
+    [[nodiscard]] bool beginResizePhysics(uint32_t edges);
     // The grabbed point moved within the frame (a retarget resized the window under the pointer).
     void setDragPhysicsGrab(double localX, double localY);
     void moveDragPhysics(double dx, double dy);
     void endDragPhysics();
+    void endResizePhysics();
+    DragPhysics::Tuning dragTuning() const;
+    bool dragPhysicsEnabled() const;
+    void resetDragPhysics();
+    void wakeDragPhysics(bool wasActive);
+    void cancelResizeGrab();
     // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
     void fitDragPhysics(bool grabMoved);
+    // Refits an active resize sheet and feeds the committed size change since the previous step.
+    void stepResizePhysics();
     struct DragFit {
       wlr_box bounds;
       std::array<float, 2> grab;
     };
+    // The content tree's drawn bounds; empty when the tree draws nothing.
+    std::optional<wlr_box> dragPhysicsBounds() const;
     // The content tree's drawn bounds and the grab as fractions of them; empty when the tree draws nothing.
     std::optional<DragFit> dragPhysicsFit() const;
     // The drag slot's expand: the sheet's displacement bound plus a filtering margin.
@@ -999,6 +1010,8 @@ namespace umbriel {
     double m_dragGrabX = 0;
     double m_dragGrabY = 0;
     wlr_box m_dragBounds{};
+    // Non-None while an interactive floating resize feeds committed size steps to the sheet.
+    DragPhysics::ResizeEdge m_dragResizeEdges = DragPhysics::ResizeEdge::None;
     bool m_dragSlotBound = false; // the content tree carries the drag slot
     wlr_box m_presentedBox{};
     // Last committed content size considered for the windows event stream.

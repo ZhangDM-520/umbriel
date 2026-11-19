@@ -694,7 +694,7 @@ namespace umbriel {
     wlr_scene_node_clear_animations(&m_contentTree->node);
     m_dragSlotBound = false;
     // The snapshot holds the frozen deformation; the live sheet ends here.
-    m_dragPhysics = DragPhysics{};
+    resetDragPhysics();
     // The window slots leave with the snapshot; a remap binds them again.
     if (m_effects.needsSurface()) {
       wlr_surface* surface = rootSurface();
