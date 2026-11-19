@@ -283,7 +283,6 @@ namespace umbriel {
     const bool settled = m_floating.retireSizeRequestIfSettled(sent.serial);
     if (settled) {
       m_floatingSizeConfigure.reset();
-      m_pointerResizeSettling = false;
       resetPresentedSurface();
     }
     return settled;

@@ -1172,7 +1172,7 @@ namespace umbriel {
   }
 
   bool Cursor::beginResize(View* view, uint32_t edges, uint32_t button) {
-    if (view == nullptr || !view->mapped() || button == 0) {
+    if (view == nullptr || !view->mapped() || button == 0 || view->scheduledFullscreen() || view->currentFullscreen()) {
       return false;
     }
     if (!isPassthrough()) {
@@ -1233,9 +1233,7 @@ namespace umbriel {
       return false;
     }
     setActiveConstraint(nullptr);
-    if (view->maximizedToEdges()) {
-      view->setMaximizedToEdges(false, false);
-    }
+    view->dropMaximizedForResize();
 
     const wlr_box& presented = view->presentedBox();
     const wlr_box geometry{view->layoutX(), view->layoutY(), presented.width, presented.height};
@@ -1464,6 +1462,11 @@ namespace umbriel {
     const auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
     if (grab != nullptr
         && (grab->workspace == nullptr
+            || grab->view == nullptr
+            || !grab->view->tiled()
+            || grab->view->workspace() != grab->workspace
+            || grab->view->scheduledFullscreen()
+            || grab->view->currentFullscreen()
             || grab->session == nullptr
             || grab->session->ownerLayout() != &grab->workspace->layout())) {
       resetMode();
@@ -3465,7 +3468,11 @@ namespace umbriel {
 
   void Cursor::processResize() {
     auto* grab = std::get_if<FloatingResizeGrab>(&m_grab);
-    if (grab == nullptr || grab->view == nullptr) {
+    if (grab == nullptr
+        || grab->view == nullptr
+        || !grab->view->floating()
+        || grab->view->scheduledFullscreen()
+        || grab->view->currentFullscreen()) {
       resetMode();
       return;
     }
@@ -3513,11 +3520,11 @@ namespace umbriel {
       }
     }
 
-    grab->view->resizeFloating(newRight - newLeft, newBottom - newTop);
-    resizeTrace::step(
-        "floating", grab->edges, m_cursor->x, m_cursor->y, grab->view->presentedBox(),
-        wlr_box{newLeft, newTop, newRight - newLeft, newBottom - newTop}
-    );
+    // The drawn box tracks the pointer immediately while client frames scale into it, so record the trace after
+    // applying the box.
+    const wlr_box target{newLeft, newTop, newRight - newLeft, newBottom - newTop};
+    grab->view->resizeFloating(target);
+    resizeTrace::step("floating", grab->edges, m_cursor->x, m_cursor->y, grab->view->presentedBox(), target);
   }
 
   void Cursor::revealClickedTile(View* view) {
@@ -3887,6 +3894,10 @@ namespace umbriel {
         || grab->workspace->group() == nullptr
         || grab->workspace->group()->output() == nullptr
         || grab->view == nullptr
+        || !grab->view->tiled()
+        || grab->view->workspace() != grab->workspace
+        || grab->view->scheduledFullscreen()
+        || grab->view->currentFullscreen()
         || grab->session == nullptr) {
       resetMode();
       return;

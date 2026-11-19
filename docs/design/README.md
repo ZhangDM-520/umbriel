@@ -23,6 +23,7 @@ Start with the user guide when a detail affects configuration or normal use. Use
 - [Client buffer constraints](client-buffer-constraints.md)
 - [Scene helper ownership](scene-helper-ownership.md)
 - [DRM GPU exclusion](drm-device-policy.md)
+- [Resize lag](resize-lag.md)
 
 ## Pull request template checks
 
@@ -40,7 +41,7 @@ A pointer resize can lag the pointer for two different reasons that look alike: 
 
 Records are one JSON object per line, appended to `$UMBRIEL_RESIZE_TRACE`, and the file is opened per record so an interrupted run keeps everything it wrote. A step carries `t_us`, `kind` (`floating` or `tiled`), `edge`, the pointer, the drawn box, the compositor's target box, and `drawn_lag` / `target_lag` for each axis. `configure` records a size configure leaving the compositor with its serial, `commit` records a client commit while a resize request is outstanding, and `deferred` records a tiled step the grab dropped because a held switch owned the workspace. Everything is compiled only with the `harness` option and resolves to no-ops otherwise, so no call site needs a guard.
 
-The trace is off unless a check asks for it with `# harness: resize-trace=true`, which makes `check.sh` export the path and create the file per instance. `animation/resize_lag` drives floating sweeps against `unmap-client` (instant, 40 ms delayed, and non-redrawing) and pins both target and drawn lag.
+The trace is off unless a check asks for it with `# harness: resize-trace=true`, which makes `check.sh` export the path and create the file per instance. `animation/resize_lag` drives floating sweeps against `unmap-client` (instant, 40 ms delayed, and non-redrawing), asserts both target and drawn lag stay within 2 px while slow clients still throttle configure pressure, verifies `RESIZE_STEP` bufferless Wayland commits release the active-drag throttle before release and pointer-resized maximized floats settle, checks post-arrange tiled trace steps and settled commit records, and pixel-probes a non-redrawing `dwindle` drag with an unrelated settling floating peer.
 
 ## Pointer drag completion
 

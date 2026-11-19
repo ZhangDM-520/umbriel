@@ -166,6 +166,15 @@ namespace umbriel {
       return *target == size
           && (content == *target || (!pointerTracks && floatingSizeResponseUsable(content, base, supplied)));
     }
+
+    // An acknowledged native Wayland commit (even bufferless) proves the client processed the configure, so the active
+    // drag throttle can send the next target without waiting for a size change.
+    bool releasesThrottle(uint32_t committedSerial, const std::array<int, 2>& content, bool ackedCommit) const {
+      if (!throttled || !serialSettled(committedSerial, serial)) {
+        return false;
+      }
+      return floatingSizeResponseUsable(content, base, supplied || ackedCommit);
+    }
   };
 
   // Center a window of the given size in `usable`. Floats keep their own size,

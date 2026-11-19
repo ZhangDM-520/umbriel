@@ -407,6 +407,9 @@ namespace umbriel {
     if (m_workspace == workspace) {
       return;
     }
+    if (Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isResizingView(this)) {
+      cursor->resetMode();
+    }
     if (workspace == nullptr || workspace->layoutMode() != LayoutMode::Stacking) {
       clearRegionState();
     }
