@@ -51,13 +51,14 @@ namespace umbriel {
       bool updateRestoreLocation = false;
     };
     Output* presentationOutput(std::string_view name, Output* fallback) const;
+    [[nodiscard]] bool visibleOn(const Output* output) const;
     Output* restoreOutputFor(const View* view) const;
     [[nodiscard]] bool moveToScratchpad(View* view, std::string_view name, Output* invokingOutput);
     [[nodiscard]] bool
     assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
     [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
     // Launch context survives an empty pad. Explicit workspace focus relinquishes it on that output.
-    std::string_view activeOn(const Output* output) const;
+    [[nodiscard]] std::string_view activeOn(const Output* output) const;
     void deactivateOn(const Output* output);
     bool refocusActive(Output* output);
     // Show a scratchpad on the invoking output without changing keyboard focus. Naming `member` while the pad shows a
@@ -108,6 +109,8 @@ namespace umbriel {
     struct Scratchpad {
       Output* output = nullptr;
       bool visible = false;
+      // The pad holds the seat and is the launch destination of its output. An empty pad keeps both while it shows,
+      // unless its last window left for a workspace.
       bool active = false;
       View* lastFocused = nullptr;
       // While visible, the one member shown in place of all of them; null when every member shows.
@@ -139,7 +142,6 @@ namespace umbriel {
     Entry* findEntry(const View* view);
     const Entry* findEntry(const View* view) const;
     bool hasEntries(std::string_view name) const;
-    bool visibleOn(Output* output) const;
     // Whether `view`, a member of `scratchpad`, is on screen.
     static bool presents(const Scratchpad& scratchpad, const View* view);
     // Whether `view` is a dialog of another member of scratchpad `name`, shown along with that member.

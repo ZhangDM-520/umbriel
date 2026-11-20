@@ -108,7 +108,7 @@ When a tiled window closes while `windows_out` is disabled, its last frame stays
 
 `animation.overview.workspace_curve` controls filmstrip movement after wheel, keyboard, and touchpad navigation. A released touchpad gesture keeps the speed the fingers had when its curve is a spring: `[animation.workspaces]` for the three-finger switch, `[animation.overview]` for the four-finger open and close, and `workspace_curve` for the filmstrip. Any other curve starts from rest.
 
-Scratchpad `dim` and `blur` remain active without a fade when animation is disabled. `dim` is the opacity of the black layer over the output behind a visible scratchpad; `blur` blurs it when `[appearance.blur]` is enabled.
+Scratchpad `dim` and `blur` remain active without a fade when animation is disabled. `dim` is the opacity of the black layer over the output behind a visible scratchpad; `blur` blurs it when `[appearance.blur]` is enabled. A pad that loses its last window stays visible with the same `dim` and `blur`, so the backdrop never fades out under a window that is still leaving; `scratchpad-toggle` or `hide_when_empty` is what removes it.
 
 A window leaving a scratchpad for a workspace fades in there over the same curve that hid it, starting transparent even when the pad was on screen. A move to a workspace that is not active, and a restore that an output loss or a removed `[[scratchpad]]` performs, show the window at full opacity instead.
 

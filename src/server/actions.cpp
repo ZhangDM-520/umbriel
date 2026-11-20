@@ -221,8 +221,15 @@ namespace umbriel {
       Output* sourceOutput = fromScratchpad                 ? scratchpad->outputFor(&view)
           : source != nullptr && source->group() != nullptr ? source->group()->output()
                                                             : nullptr;
-      if (fromScratchpad && !scratchpad->restoreToWorkspace(&view, &target)) {
-        return;
+      if (fromScratchpad) {
+        // Following the window activates the destination first, so the restore lands on a workspace that is already on
+        // screen and the fade it starts is not reset by the switch transition that just began.
+        if (follow) {
+          target.group()->activate(&target);
+        }
+        if (!scratchpad->restoreToWorkspace(&view, &target)) {
+          return;
+        }
       }
       const bool floating = view.floating();
       std::optional<double> widthFrac;

@@ -142,16 +142,17 @@ assert_state '.scratchpad == "" and .floating and (.workspace | startswith("HEAD
 assert_size "$TITLE" 480x270
 
 # Explicit workspace moves likewise retain a resized float's size and release
-# membership, even when the destination is on another output.
+# membership. A pad still showing its empty backdrop keeps its output, so a
+# member joins it there rather than following the pointer.
 pointer_to left
 action window-move-to-scratchpad scaled
 action window-focus "$member"
 action window-set-primary-extent 0.5
 action window-set-secondary-extent 0.5
-assert_size "$TITLE" 512x288
+assert_size "$TITLE" 960x540
 action window-move-to-workspace RIGHT --output HEADLESS-2
 assert_state '.scratchpad == "" and .floating and (.workspace | startswith("HEADLESS-2:"))'
-assert_size "$TITLE" 512x288
+assert_size "$TITLE" 960x540
 
 # A member originally tiled returns tiled; floating it later recovers the size
 # the user chose in the scratchpad.
