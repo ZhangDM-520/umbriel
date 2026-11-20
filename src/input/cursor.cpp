@@ -3284,6 +3284,18 @@ namespace umbriel {
     Output* destination =
         m_server->outputFromWlr(wlr_output_layout_output_at(m_server->outputLayout(), m_cursor->x, m_cursor->y));
     Workspace* workspace = destination != nullptr ? destination->workspaceGroup()->active() : nullptr;
+    // A pad showing on the drop output takes the window instead of the workspace underneath it. A lifted tab group
+    // would have to split its tabs and a pin gesture asked for pinning, so both keep the workspace drop.
+    if (ScratchpadManager* scratchpad = m_server->scratchpadManager(); scratchpad != nullptr
+        && destination != nullptr
+        && !scratchpad->contains(view)
+        && grab->tabGroup.tabs.empty()
+        && grab->target != DragTarget::Pinned
+        && scratchpad->dropInto(view, destination, grab->sourceWorkspace, dropX, dropY)) {
+      resetMode();
+      m_server->focusView(view, FocusReason::DragDrop);
+      return;
+    }
     if (grab->target == DragTarget::Tiled && workspace != nullptr && workspace->layoutMode() == LayoutMode::Stacking) {
       view->floatForStackingLayout();
     } else {

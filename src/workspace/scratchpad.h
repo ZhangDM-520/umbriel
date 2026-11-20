@@ -52,8 +52,14 @@ namespace umbriel {
     };
     Output* presentationOutput(std::string_view name, Output* fallback) const;
     [[nodiscard]] bool visibleOn(const Output* output) const;
+    // Which pad is on screen on `output`, empty when none is.
+    [[nodiscard]] std::string_view visibleNameOn(const Output* output) const;
     Output* restoreOutputFor(const View* view) const;
     [[nodiscard]] bool moveToScratchpad(View* view, std::string_view name, Output* invokingOutput);
+    // Place a window the pointer dropped at (`dropX`, `dropY`) on `output` into the pad showing there, remembering
+    // `sourceWorkspace` as where a restore returns it. False when no pad is visible on that output, or the pad refuses
+    // the window.
+    [[nodiscard]] bool dropInto(View* view, Output* output, Workspace* sourceWorkspace, int dropX, int dropY);
     [[nodiscard]] bool
     assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
     [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
