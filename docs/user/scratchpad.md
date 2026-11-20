@@ -166,7 +166,7 @@ Fullscreen and maximized windows continue to fit their monitor, and their saved 
 
 ## Visibility and focus
 
-Showing a populated scratchpad focuses its most recently focused member. Hiding it returns focus to a workspace window. Opening the workspace overview hides every visible scratchpad without removing its stored windows. While the overview is open, including its closing animation, scratchpad actions and window rules do not show a scratchpad.
+Showing a populated scratchpad focuses its most recently focused member. Hiding it returns focus to a workspace window. Opening the workspace overview fades every visible scratchpad and its backdrop out with the opening zoom, then hides the pad without removing its stored windows. A swipe that never opens the overview leaves the pad as it was. While the overview is open, including its closing animation, scratchpad actions and window rules do not show a scratchpad.
 
 A dialog parented to a visible scratchpad window joins that scratchpad unless a window rule explicitly chooses another destination.
 
@@ -180,7 +180,7 @@ Fullscreen, pinned, and maximize-to-edges state are cleared when a window enters
 
 ## Moving scratchpad windows
 
-Workspace move bindings remove the focused window from its scratchpad and send it to the selected workspace, restoring its saved tiled or floating state. Use `window-move-to-workspace <workspace> [--output <output>]` to follow the window, or `window-move-to-workspace-silent <workspace> [--output <output>]` to keep the current workspace active. The next and previous variants work too, using the active workspace on the scratchpad's output as their starting point. Other members stay in the scratchpad. Moving its last member out hides the scratchpad.
+Workspace move bindings remove the focused window from its scratchpad and send it to the selected workspace, restoring its saved tiled or floating state. The window fades in there over [`animation.scratchpad`](animation.md#animation); a silent move to a workspace that is not active fills it in at full opacity, since it is not on screen. Use `window-move-to-workspace <workspace> [--output <output>]` to follow the window, or `window-move-to-workspace-silent <workspace> [--output <output>]` to keep the current workspace active. The next and previous variants work too, using the active workspace on the scratchpad's output as their starting point. Other members stay in the scratchpad. Moving its last member out hides the scratchpad.
 
 Dragging a scratchpad window does not restore it. Dragging one member to another output moves the whole scratchpad there while preserving the other members' relative positions.
 

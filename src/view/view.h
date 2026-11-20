@@ -456,6 +456,9 @@ namespace umbriel {
     void cancelPositionAnimation();
     void snapPosition(int x, int y);
     void animateFadeTo(float toAlpha, int durationMs, const AnimationCurve& curve);
+    // Fade a window in as it leaves a scratchpad for its workspace: the second half of the fade that removed it. Bound
+    // to the scratchpad event even though its pad membership is already gone.
+    void beginScratchpadRestoreFade(int durationMs, const AnimationCurve& curve);
     const ViewPresentation& presentation() const { return m_presentation; }
     // Size/position to the full output and drop tile clips (exclusive zones do not apply).
     void applyFullscreenLayout(bool animate = false);
@@ -668,6 +671,9 @@ namespace umbriel {
     bool fullscreenOpaque() const;
     // The lifecycle fade runs through a whole-window shader, so buffers and borders stay opaque under it.
     bool fadeComposited() const;
+    // The event the fade binds and eases with: the pad's while the view belongs to one, the lifecycle's otherwise, or
+    // the one a scratchpad restore set for the fade it is running.
+    AnimationEvent fadeEvent() const;
     void applyEffectiveOpacity();
     void watchViewSurfaceTree(wlr_surface* root, wlr_subsurface* attachment = nullptr);
     void watchViewSurface(wlr_surface* surface, wlr_subsurface* attachment);
@@ -1099,6 +1105,8 @@ namespace umbriel {
     AnimatedValue m_posY;
     AnimatedValue m_fade;
     bool m_customFade = false;
+    // Set while a scratchpad restore fade runs, so the fade keeps the scratchpad event after membership is cleared.
+    std::optional<AnimationEvent> m_fadeEvent;
     AnimatedColor m_borderColorAnim;
     AnimatedColor m_outerBorderColorAnim;
     AnimatedValue m_focusDim{1.0};

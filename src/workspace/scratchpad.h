@@ -151,6 +151,9 @@ namespace umbriel {
     // nearest window of the scratchpad it was opened from, and any other window clears it.
     void forgetLastFocused(Scratchpad& scratchpad, std::string_view name, const View* view) const;
     enum class Admission { Interactive, Automatic };
+    // Whether a window leaving the pad dissolves in on its workspace, or lands fully visible because nothing of it is
+    // on screen.
+    enum class RestoreTransition { Snap, Animated };
     bool admit(
         View* view, std::string_view name, Output* invokingOutput, Admission admission,
         const AutomaticAdmission& options
@@ -164,7 +167,7 @@ namespace umbriel {
         View* view, const wlr_box& previousArea, const wlr_box& targetArea, bool proportionalSize,
         bool reposition = true
     );
-    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target = nullptr);
+    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition);
     // Retarget the backdrop dim/blur fade for `output` and refresh its scene nodes.
     void retargetBackdrop(Output* output, bool visible, bool animateTransition = true);
     wlr_scene_rect* dimRectFor(Output* output);
