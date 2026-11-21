@@ -327,7 +327,7 @@ namespace umbriel {
     if (resp.is_discarded() || !resp.is_object() || !resp.contains("ok")) {
       return std::nullopt;
     }
-    return resp["ok"];
+    return std::optional<nlohmann::json>(resp["ok"]);
   }
 
 } // namespace umbriel
