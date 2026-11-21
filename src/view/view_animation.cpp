@@ -11,6 +11,7 @@
 #include "scene/surface_blur.h"
 #include "server/color_manager.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -267,10 +268,6 @@ namespace umbriel {
   }
 
   int View::presentedWidth(const wlr_box& target) const {
-    if (presentsCommittedSize()) {
-      const int committed = committedContentBox().width;
-      return m_tiled ? std::min(committed, target.width) : committed;
-    }
     if (sizeGrabActive()) {
       return target.width;
     }
@@ -289,10 +286,6 @@ namespace umbriel {
   void View::trackPresentedSize(int width, int height) { m_presentation.track(width, height); }
 
   int View::presentedHeight(const wlr_box& target) const {
-    if (presentsCommittedSize()) {
-      const int committed = committedContentBox().height;
-      return m_tiled ? std::min(committed, target.height) : committed;
-    }
     if (sizeGrabActive()) {
       return target.height;
     }
@@ -422,13 +415,14 @@ namespace umbriel {
   }
 
   bool View::sizeGrabTracksPointer() const {
+    if (scheduledFullscreen() || currentFullscreen()) {
+      return false;
+    }
     const Cursor* cursor = m_server->cursor();
     return cursor != nullptr
-        && (cursor->isResizingView(this) || cursor->isResizingWorkspace(m_workspace))
+        && (cursor->isResizingView(this) || (m_tiled && cursor->isResizingWorkspace(m_workspace)))
         && !tiledResizeWaitsForClient();
   }
-
-  bool View::presentsCommittedSize() const { return sizeGrabTracksPointer() || m_pointerResizeSettling; }
 
   bool View::tiledResizeWaitsForClient() const {
     const auto& animation = config().animation;
@@ -833,6 +827,7 @@ namespace umbriel {
             ? ClientSize{.width = surface->current.width, .height = surface->current.height}
             : ClientSize{},
     };
+    resizeTrace::configure("tiled", width, height, m_tiledSizeRequest->serial);
   }
 
   bool View::settleTiledSizeRequest() {
@@ -1180,6 +1175,9 @@ namespace umbriel {
     // trail the pointer while clients acknowledge successive configures.
     const Cursor* cursor = m_server->cursor();
     if (cursor != nullptr
+        && m_tiled
+        && !scheduledFullscreen()
+        && !currentFullscreen()
         && cursor->isResizingWorkspace(m_workspace)
         && !tiledResizeWaitsForClient()
         && sizeAnimating()) {
@@ -1651,18 +1649,17 @@ namespace umbriel {
         .width = content.width,
         .height = content.height,
     };
-    const bool committedSize = presentsCommittedSize();
-    if (committedSize && m_presentedCropActive) {
+    const bool scalesPresented = layoutPresentationOwned()
+        || sizeGrabActive()
+        || m_floating.pendingSize()
+        || (openingAnimationActive() && m_openingFloatingSize);
+    if (!scalesPresented && m_presentedCropActive) {
       // The clip below crops 1:1, but an unchanged clip box would keep the scaled crop programmed before.
       resetPresentedSurface();
     }
     setSurfaceTreeClip(&surfaceClip);
     applyCornerRadius();
-    if (!committedSize
-        && (layoutPresentationOwned()
-            || sizeGrabActive()
-            || m_floating.pendingSize()
-            || (openingAnimationActive() && m_openingFloatingSize))) {
+    if (scalesPresented) {
       // The clip crops 1:1 in surface coordinates and caps the destination at the committed surface size, so it cannot
       // express an animated or interactive presented size. Program the buffer directly; the clip above keeps the buffer
       // node positioned at the visible box origin.

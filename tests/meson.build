@@ -85,6 +85,7 @@ unit_tests = [
   ['floating', ['unit/floating.cpp'], []],
   ['window-region', ['unit/window_region.cpp'], []],
   ['drag-physics', ['unit/drag_physics.cpp'], []],
+  ['resize-lag', ['unit/resize_lag.cpp'], []],
   ['preset-cycle', ['unit/preset_cycle.cpp'], []],
   ['maximize', ['unit/maximize.cpp'], []],
   ['deferred-unfullscreen', ['unit/deferred_unfullscreen.cpp'], []],

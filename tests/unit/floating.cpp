@@ -174,6 +174,19 @@ UMBRIEL_TEST(contentHandoffSupportsXwaylandAndSerialWraparound) {
   CHECK(sent.settled(4, std::nullopt, {600, 450}, false));
 }
 
+UMBRIEL_TEST(sameSizedWaylandAckReleasesResizeThrottleWithoutSettlingHandoff) {
+  umbriel::FloatingSizeConfigure sent{.size = {605, 400}, .base = {600, 400}, .serial = 10, .throttled = true};
+  CHECK(!sent.releasesThrottle(9, {600, 400}, true));
+  CHECK(!sent.releasesThrottle(10, {600, 400}, false));
+  CHECK(sent.releasesThrottle(10, {600, 400}, true));
+  CHECK(!sent.releasesThrottle(10, {0, 400}, true));
+  // Handoff still requires a fresh buffer or changed content size.
+  CHECK(!sent.settled(10, sent.size, {600, 400}, false));
+  CHECK(sent.releasesThrottle(10, {605, 400}, false));
+  sent.throttled = false;
+  CHECK(!sent.releasesThrottle(10, {605, 400}, true));
+}
+
 // Clamp arithmetic
 UMBRIEL_TEST(keepVisibleIsAQuarterWithinBounds) {
   CHECK_EQ(floatingKeepVisible(200), 50);

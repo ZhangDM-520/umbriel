@@ -14,6 +14,7 @@
 #include "scene/surface_blur.h"
 #include "server/ipc.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -1110,6 +1111,7 @@ namespace umbriel {
         m_savedScrollingExtent = rule.defaultScrollingExtent;
       }
     }
+    const bool hadResizeRequest = m_floatingSizeConfigure.has_value() || m_tiledSizeRequest.has_value();
     commitFloatingSize();
     (void)settleTiledSizeRequest();
     applyCornerRadius();
@@ -1166,6 +1168,10 @@ namespace umbriel {
     // An adaptive title bar shows the top of this surface, so a repaint of that edge has to reach it with no reload.
     if (m_ssdFrame != nullptr) {
       m_ssdFrame->syncContent(geometryBox());
+    }
+    // The tick a resize waits for: the client has answered a configure with a buffer of a new size.
+    if (m_mapped && (hadResizeRequest || m_floatingSizeConfigure || m_tiledSizeRequest)) {
+      resizeTrace::commit(*this);
     }
     if (Ipc* ipc = m_server->ipc()) {
       ipc->notifyWindowCommitted();

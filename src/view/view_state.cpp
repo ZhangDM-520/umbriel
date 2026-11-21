@@ -1029,9 +1029,14 @@ namespace umbriel {
         "set_fullscreen '{}' [{}] -> {} (tiled={}, ws_active={})", appId() != nullptr ? appId() : "?",
         static_cast<const void*>(this), fullscreen, m_tiled, m_workspace != nullptr && m_workspace->active()
     );
-    if (fullscreen && m_maximizedToEdges) {
-      setMaximizedToEdges(false, false);
-      m_restoreMaximizedToEdges = true;
+    if (fullscreen) {
+      if (Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isResizingView(this)) {
+        cursor->resetMode();
+      }
+      if (m_maximizedToEdges) {
+        setMaximizedToEdges(false, false);
+        m_restoreMaximizedToEdges = true;
+      }
     }
     if (fullscreen && !m_tiled && !scheduledFullscreen() && !currentFullscreen()) {
       // A requested resize or move may still be awaiting its client buffer or animation. Restore its target geometry.
