@@ -152,9 +152,15 @@ namespace umbriel {
     return std::ranges::any_of(m_entries, [name](const Entry& entry) { return entry.scratchpad == name; });
   }
 
-  bool ScratchpadManager::visibleOn(Output* output) const {
+  bool ScratchpadManager::visibleOn(const Output* output) const {
     return std::ranges::any_of(m_scratchpads, [output](const auto& entry) {
       return entry.second.visible && entry.second.output == output;
+    });
+  }
+
+  bool ScratchpadManager::showsEntriesOn(const Output* output) const {
+    return std::ranges::any_of(m_scratchpads, [&](const auto& entry) {
+      return entry.second.visible && entry.second.output == output && hasEntries(entry.first);
     });
   }
 
@@ -406,9 +412,17 @@ namespace umbriel {
       scratchpad->solo = memberFor(view, name);
     }
     setVisible(name, visible, admission == Admission::Interactive);
-    // Without its shown window, a scratchpad showing one window hides rather than revealing all the others.
-    if (transferring && (leftPreviousSolo || !hasEntries(previousScratchpad))) {
+    // Without its shown window, a pad showing one window hides rather than revealing all the others. A pad left with
+    // nothing keeps showing its backdrop unless `hide_when_empty` asks for it to go.
+    if (transferring && hasEntries(previousScratchpad) && leftPreviousSolo) {
       setVisible(previousScratchpad, false, admission == Admission::Interactive);
+    } else if (transferring && !hasEntries(previousScratchpad)) {
+      const ScratchpadConfig* definition = definitionFor(previousScratchpad);
+      if (definition != nullptr && definition->hideWhenEmpty) {
+        setVisible(previousScratchpad, false, admission == Admission::Interactive);
+      } else if (Scratchpad* previous = findScratchpad(previousScratchpad); previous != nullptr) {
+        updateDimAndBlur(previous->output);
+      }
     }
     view->notifyOutputScale();
     output->updateVrr();
@@ -779,6 +793,8 @@ namespace umbriel {
     wlr_output_layout_get_box(m_server->outputLayout(), output->wlr(), &box);
 
     if (wlr_scene_rect* rect = dimRectFor(output)) {
+      // An empty pad dims the output without taking pointer input from the windows behind it.
+      rect->accepts_input = showsEntriesOn(output);
       if ((!visible && currentAlpha <= 0.001F) || dim <= 0.0 || currentAlpha <= 0.001F) {
         wlr_scene_node_set_enabled(&rect->node, false);
       } else {
@@ -1239,7 +1255,9 @@ namespace umbriel {
     return true;
   }
 
-  bool ScratchpadManager::restoreView(View* view, Output* fallback, bool focus, Workspace* target) {
+  bool ScratchpadManager::restoreView(
+      View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition
+  ) {
     const auto iterator =
         std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
     if (iterator == m_entries.end()) {
@@ -1363,9 +1381,43 @@ namespace umbriel {
       workspace->syncViewPresentation(view);
     }
 
-    // Without its shown window, a pad showing one window hides rather than revealing all the others.
-    if (scratchpad != nullptr && (wasSolo || !hasEntries(entry.scratchpad)) && scratchpad->visible) {
+    // Without its shown window, a pad showing one window hides rather than revealing all the others. A pad the last
+    // member leaves keeps showing its backdrop, so the restore is never a backdrop fade racing the window's own.
+    if (scratchpad != nullptr && wasSolo && hasEntries(entry.scratchpad) && scratchpad->visible) {
       setVisible(entry.scratchpad, false);
+    }
+    // A pad whose last window returned to its workspace keeps showing its backdrop but stops holding the seat or the
+    // launch destination: focus goes back to a workspace window, which owns both from here. Forgetting the old member
+    // also keeps a view that is being destroyed out of reach.
+    if (scratchpad != nullptr && !hasEntries(entry.scratchpad)) {
+      scratchpad->active = false;
+      scratchpad->solo = nullptr;
+      scratchpad->lastFocused = nullptr;
+      // An opted-in pad hides however it empties, not only when its last window closes.
+      const ScratchpadConfig* definition = definitionFor(entry.scratchpad);
+      if (definition != nullptr && definition->hideWhenEmpty && scratchpad->visible) {
+        setVisible(entry.scratchpad, false);
+      } else {
+        updateDimAndBlur(scratchpad->output);
+      }
+    }
+    // The window returns the way the pad removed it: a fade-out hides it, so an interactive restore fades it back in
+    // over the same curve. An automatic restore or a move to an inactive workspace snaps instead, since nothing of it
+    // is on screen, and a member a hidden pad left transparent must not stay that way on its workspace.
+    const auto& animation = config().animation;
+    const bool animateRestore = transition == RestoreTransition::Animated
+        && workspace != nullptr
+        && view->mapped()
+        && view->onActiveWorkspace()
+        && !view->tabHidden()
+        && !view->minimized()
+        && !overviewOpen(*m_server)
+        && animation.enabled
+        && animation.scratchpad.enabled;
+    if (animateRestore) {
+      view->beginScratchpadRestoreFade(animation.scratchpad.durationMs, animation.scratchpad.curve);
+    } else {
+      view->cancelFadeAnimation();
     }
     if (scratchpadOutput != nullptr) {
       scratchpadOutput->updateVrr();
@@ -1383,11 +1435,13 @@ namespace umbriel {
       return false;
     }
     const Scratchpad* scratchpad = findScratchpad(name);
-    return restoreView(view, scratchpad != nullptr ? scratchpad->output : nullptr, true);
+    return restoreView(
+        view, scratchpad != nullptr ? scratchpad->output : nullptr, true, nullptr, RestoreTransition::Animated
+    );
   }
 
   bool ScratchpadManager::restoreToWorkspace(View* view, Workspace* workspace) {
-    return workspace != nullptr && restoreView(view, outputFor(view), false, workspace);
+    return workspace != nullptr && restoreView(view, outputFor(view), false, workspace, RestoreTransition::Animated);
   }
 
   void ScratchpadManager::remove(View* view) {
@@ -1408,9 +1462,18 @@ namespace umbriel {
     const bool wasSolo = scratchpad != nullptr && scratchpad->solo == view;
     std::erase(m_hidingViews, view);
     m_entries.erase(iterator);
-    // Without its shown window, a pad showing one window hides rather than revealing all the others.
-    if (scratchpad != nullptr && wasSolo && scratchpad->visible) {
+    // Without its shown window, a pad showing one window hides rather than revealing all the others. A pad whose last
+    // window closes keeps showing its backdrop.
+    if (scratchpad != nullptr && wasSolo && hasEntries(name) && scratchpad->visible) {
       setVisible(name, false);
+    }
+    // A pad whose last window closed keeps the seat and the launch destination while it shows its backdrop: there is no
+    // workspace focus to hand them to, and the next launch should still land in the pad. `hide_when_empty` overrides
+    // this below. Forgetting the old member also keeps a view that is being destroyed out of reach.
+    if (scratchpad != nullptr && !hasEntries(name)) {
+      scratchpad->solo = nullptr;
+      scratchpad->lastFocused = nullptr;
+      updateDimAndBlur(scratchpad->output);
     }
     // A hide_when_empty pad hides once its last member leaves, handing that member's keyboard focus back.
     const ScratchpadConfig* definition = definitionFor(name);
@@ -1498,7 +1561,7 @@ namespace umbriel {
         }
       }
       for (View* view : views) {
-        refocusNeeded = restoreView(view, fallback, false) || refocusNeeded;
+        refocusNeeded = restoreView(view, fallback, false, nullptr, RestoreTransition::Snap) || refocusNeeded;
       }
       m_scratchpads.erase(name);
     }

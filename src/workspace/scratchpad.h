@@ -51,13 +51,14 @@ namespace umbriel {
       bool updateRestoreLocation = false;
     };
     Output* presentationOutput(std::string_view name, Output* fallback) const;
+    [[nodiscard]] bool visibleOn(const Output* output) const;
     Output* restoreOutputFor(const View* view) const;
     [[nodiscard]] bool moveToScratchpad(View* view, std::string_view name, Output* invokingOutput);
     [[nodiscard]] bool
     assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
     [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
     // Launch context survives an empty pad. Explicit workspace focus relinquishes it on that output.
-    std::string_view activeOn(const Output* output) const;
+    [[nodiscard]] std::string_view activeOn(const Output* output) const;
     void deactivateOn(const Output* output);
     bool refocusActive(Output* output);
     // Show a scratchpad on the invoking output without changing keyboard focus. Naming `member` while the pad shows a
@@ -115,6 +116,8 @@ namespace umbriel {
     struct Scratchpad {
       Output* output = nullptr;
       bool visible = false;
+      // The pad holds the seat and is the launch destination of its output. An empty pad keeps both while it shows,
+      // unless its last window left for a workspace.
       bool active = false;
       View* lastFocused = nullptr;
       // While visible, the one member shown in place of all of them; null when every member shows.
@@ -146,7 +149,9 @@ namespace umbriel {
     Entry* findEntry(const View* view);
     const Entry* findEntry(const View* view) const;
     bool hasEntries(std::string_view name) const;
-    bool visibleOn(Output* output) const;
+    // Whether the pad shown on `output` has a window to interact with, which is what makes its backdrop take pointer
+    // input. A hidden pad with members on the same output contributes nothing.
+    bool showsEntriesOn(const Output* output) const;
     // Whether `view`, a member of `scratchpad`, is on screen.
     static bool presents(const Scratchpad& scratchpad, const View* view);
     // Whether `view` is a dialog of another member of scratchpad `name`, shown along with that member.
@@ -158,6 +163,9 @@ namespace umbriel {
     // nearest window of the scratchpad it was opened from, and any other window clears it.
     void forgetLastFocused(Scratchpad& scratchpad, std::string_view name, const View* view) const;
     enum class Admission { Interactive, Automatic };
+    // Whether a window leaving the pad dissolves in on its workspace, or lands fully visible because nothing of it is
+    // on screen.
+    enum class RestoreTransition { Snap, Animated };
     bool admit(
         View* view, std::string_view name, Output* invokingOutput, Admission admission,
         const AutomaticAdmission& options
@@ -171,7 +179,7 @@ namespace umbriel {
         View* view, const wlr_box& previousArea, const wlr_box& targetArea, bool proportionalSize,
         bool reposition = true
     );
-    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target = nullptr);
+    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition);
     // Retarget the backdrop dim/blur fade for `output` and refresh its scene nodes.
     void retargetBackdrop(Output* output, bool visible, bool animateTransition = true);
     // Push each tracked snapshot's current backdrop fade.
