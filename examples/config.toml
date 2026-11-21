@@ -83,6 +83,12 @@ files = []
 # Blur uses a smaller radius than the built-in default.
 # https://docs.noctalia.dev/umbriel/appearance/
 #
+# [appearance]
+# How content that shrinks is sampled: "box" averages each destination pixel's
+# source footprint, "bilinear" takes one interpolated sample per pixel, and
+# "nearest" the closest texel.
+# downsample = "box"
+
 [appearance.blur]
 radius = 3
 

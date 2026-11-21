@@ -145,7 +145,7 @@ Omit `position` to place outputs automatically from left to right. Explicitly po
 
 ### Supersampling with `render_scale`
 
-`render_scale` separates what things look like from what Wayland clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
+`render_scale` separates what things look like from what Wayland clients render at, the way macOS handles HiDPI. With `scale = 1.35` and `render_scale = 2.0`, clients are asked to render at 2.0 and the compositor samples their buffers down to the output's `scale` raster, which smooths text and fine detail on low-ppi and non-RGB-subpixel panels. The sampling method is configurable (`appearance.downsample`): the default `box` averages each destination pixel's source footprint. Logical geometry is unchanged: windows keep their `scale` sizes, and the output still advertises `scale` so client interfaces size as before.
 
 Which windows render at `render_scale`:
 

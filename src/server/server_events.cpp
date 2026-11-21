@@ -810,6 +810,12 @@ namespace umbriel {
         output->markDirty(Dirty::LayerArrange);
       }
     }
+    if (effects.sceneDownsample) {
+      applyDownsampleMode();
+      for (const auto& output : m_outputs) {
+        output->scheduleFullFrame();
+      }
+    }
     if (effects.input) {
       applyKeyboardConfig();
       for (const auto& pointer : m_pointers) {
