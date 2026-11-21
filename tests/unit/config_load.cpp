@@ -1283,6 +1283,26 @@ action = "window-restore-from-scratchpad missing"
   CHECK(containsDiagnostic(store, "ignoring hot_corners.bottom_left.action (unknown scratchpad 'missing')"));
 }
 
+UMBRIEL_TEST(scratchpadBlurStrengthDefaultsAndClamps) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[animation.scratchpad]\nblur = true\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().animation.scratchpad.blurStrength, 1.0);
+
+  file.write("[animation.scratchpad]\nblur = true\nblur_strength = 2.0\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().animation.scratchpad.blurStrength, 1.0);
+  CHECK(containsDiagnostic(store, "animation.scratchpad.blur_strength = 2 out of range, clamped to 1"));
+
+  file.write("[animation.scratchpad]\nblur = true\nblur_strength = -1.0\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().animation.scratchpad.blurStrength, 0.0);
+  CHECK(containsDiagnostic(store, "animation.scratchpad.blur_strength = -1 out of range, clamped to 0"));
+}
+
 UMBRIEL_TEST(overviewBackgroundBlurLoads) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
@@ -3851,6 +3871,7 @@ curve = "custom"
 [animation.scratchpad]
 dim = 0.4
 blur = true
+blur_strength = 0.35
 )");
 
   ConfigStore& store = umbriel::configStore();
@@ -3879,6 +3900,7 @@ blur = true
   CHECK_EQ(animation.windowsMove.durationMs, 320);
   CHECK_EQ(animation.scratchpad.dim, 0.4);
   CHECK(animation.scratchpad.blur);
+  CHECK_EQ(animation.scratchpad.blurStrength, 0.35);
 
   file.write(R"(
 [appearance.animations]

@@ -204,6 +204,7 @@ namespace umbriel {
       static const registry::Fields<A::Scratchpad> scratchpad = eventFields<A::Scratchpad>({
           real("dim", 0.0, 1.0, &A::Scratchpad::dim),
           boolean("blur", &A::Scratchpad::blur),
+          real("blur_strength", 0.0, 1.0, &A::Scratchpad::blurStrength),
       });
       static const registry::Fields<A::Dialogs> dialogs = timelineFields<A::Dialogs>({
           boolean("enabled", &A::Dialogs::enabled),

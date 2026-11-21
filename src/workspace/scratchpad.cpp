@@ -768,6 +768,7 @@ namespace umbriel {
     const bool visible = visibleOn(output);
     const double dim = config().animation.scratchpad.dim;
     const bool blurEnabled = config().animation.scratchpad.blur && config().appearance.blur.enabled;
+    const auto blurStrength = static_cast<float>(config().animation.scratchpad.blurStrength);
     const auto fade = m_backdropFades.find(output);
     const float currentAlpha = fade != m_backdropFades.end() ? static_cast<float>(fade->second.current()) : 0.0F;
 
@@ -799,6 +800,8 @@ namespace umbriel {
         wlr_scene_blur_set_size(blur, box.width, box.height);
         wlr_scene_blur_set_corner_radius(blur, 0);
         wlr_scene_blur_set_alpha(blur, std::clamp(currentAlpha, 0.0F, 1.0F));
+        // The fade moves alpha alone; strength stays independent of it.
+        wlr_scene_blur_set_strength(blur, blurStrength);
         wlr_scene_node_set_enabled(&blur->node, true);
       }
     }
