@@ -142,6 +142,9 @@ namespace umbriel {
     Entry* findEntry(const View* view);
     const Entry* findEntry(const View* view) const;
     bool hasEntries(std::string_view name) const;
+    // Whether the pad shown on `output` has a window to interact with, which is what makes its backdrop take pointer
+    // input. A hidden pad with members on the same output contributes nothing.
+    bool showsEntriesOn(const Output* output) const;
     // Whether `view`, a member of `scratchpad`, is on screen.
     static bool presents(const Scratchpad& scratchpad, const View* view);
     // Whether `view` is a dialog of another member of scratchpad `name`, shown along with that member.

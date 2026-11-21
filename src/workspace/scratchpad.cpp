@@ -153,6 +153,12 @@ namespace umbriel {
     });
   }
 
+  bool ScratchpadManager::showsEntriesOn(const Output* output) const {
+    return std::ranges::any_of(m_scratchpads, [&](const auto& entry) {
+      return entry.second.visible && entry.second.output == output && hasEntries(entry.first);
+    });
+  }
+
   bool ScratchpadManager::presents(const Scratchpad& scratchpad, const View* view) {
     if (!scratchpad.visible || scratchpad.output == nullptr) {
       return false;
@@ -396,6 +402,8 @@ namespace umbriel {
       const ScratchpadConfig* definition = definitionFor(previousScratchpad);
       if (definition != nullptr && definition->hideWhenEmpty) {
         setVisible(previousScratchpad, false, admission == Admission::Interactive);
+      } else if (Scratchpad* previous = findScratchpad(previousScratchpad); previous != nullptr) {
+        updateDimAndBlur(previous->output);
       }
     }
     view->notifyOutputScale();
@@ -770,6 +778,8 @@ namespace umbriel {
     wlr_output_layout_get_box(m_server->outputLayout(), output->wlr(), &box);
 
     if (wlr_scene_rect* rect = dimRectFor(output)) {
+      // An empty pad dims the output without taking pointer input from the windows behind it.
+      rect->accepts_input = showsEntriesOn(output);
       if ((!visible && currentAlpha <= 0.001F) || dim <= 0.0 || currentAlpha <= 0.001F) {
         wlr_scene_node_set_enabled(&rect->node, false);
       } else {
@@ -1322,6 +1332,8 @@ namespace umbriel {
       const ScratchpadConfig* definition = definitionFor(entry.scratchpad);
       if (definition != nullptr && definition->hideWhenEmpty && scratchpad->visible) {
         setVisible(entry.scratchpad, false);
+      } else {
+        updateDimAndBlur(scratchpad->output);
       }
     }
     // The window returns the way the pad removed it: a fade-out hides it, so an interactive restore fades it back in
@@ -1396,6 +1408,7 @@ namespace umbriel {
     if (scratchpad != nullptr && !hasEntries(name)) {
       scratchpad->solo = nullptr;
       scratchpad->lastFocused = nullptr;
+      updateDimAndBlur(scratchpad->output);
     }
     // A hide_when_empty pad hides once its last member leaves, handing that member's keyboard focus back.
     const ScratchpadConfig* definition = definitionFor(name);

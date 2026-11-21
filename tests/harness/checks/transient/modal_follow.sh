@@ -177,6 +177,13 @@ mover_drag() {
 
 mover_overview_drop() {
   local x y start_x other_x
+  # The emptied pad from mover_scratchpad stays standing over its output, and the Mod-drag drop may have joined it
+  # there. The card drop below belongs to the workspace, so return the parent and dismiss the pad first.
+  if [[ $(field transient-parent scratchpad) != "" ]]; then
+    "$UMBRIEL" msg window-restore-from-scratchpad > /dev/null
+  fi
+  "$UMBRIEL" msg scratchpad-toggle > /dev/null
+  "$UMBRIEL" settle
   start_x=$(output_x "$START")
   other_x=$(output_x "$OTHER")
   x=$(($(field transient-parent x) - start_x))
