@@ -90,6 +90,8 @@ namespace umbriel {
       int geometryWidth = 0;
       int geometryHeight = 0;
       uint32_t edges = 0;
+      // The view's drag physics took the resize grab.
+      bool physics = false;
     };
     struct TiledResizeGrab {
       View* view = nullptr;
@@ -100,6 +102,8 @@ namespace umbriel {
       std::unique_ptr<ResizeGrab> session;
       // Pointer motion that arrived while the workspace held a switch for its clients, applied once it lands.
       bool deferred = false;
+      // Record the trace step after Workspace::arrange() updates presentedBox() and workspace target state.
+      bool tracePending = false;
     };
     struct ScrollDragGrab {
       uint32_t button = 0;
@@ -188,6 +192,12 @@ namespace umbriel {
     bool isResizingWorkspace(const Workspace* workspace) const;
     // Applies pointer motion a tiled resize on this workspace deferred while its last step waited for clients.
     void resumeTiledResize(const Workspace* workspace);
+    // Whether a tiled resize grab still owns a window the layout can resize.
+    [[nodiscard]] bool tiledResizeTargetValid(const TiledResizeGrab& grab) const;
+    // Logs the tiled resize step once Workspace::arrange() has updated presented boxes.
+    void traceTiledResizeStep(const Workspace* workspace);
+    // Clears any pending tiled trace step when a workspace arrange returns early without presenting.
+    void clearPendingTiledTrace(const Workspace* workspace);
 
     void attachInputDevice(wlr_input_device* device);
     void applyConfig();

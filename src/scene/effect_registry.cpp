@@ -71,6 +71,10 @@ vec4 animation(vec2 uv) {
                   && settings.windowsOut.style != "slide"));
     }
 
+    bool deformationEnabled(const Config::Animation& settings) {
+      return settings.enabled && (settings.windowsDrag.physics || settings.windowsResize.physics);
+    }
+
     fx_effect_kind toFxKind(EffectKind kind) {
       switch (kind) {
       case EffectKind::Animation:
@@ -130,6 +134,7 @@ vec4 animation(vec2 uv) {
     m_inPlaceReferenced = false;
     m_cursorActive = false;
     m_renderer = nullptr;
+    ++m_generation;
   }
 
   void EffectRegistry::updateCursorActive() {
@@ -150,12 +155,19 @@ vec4 animation(vec2 uv) {
   void EffectRegistry::setSuspended(bool suspended) {
     m_ledger.setSuspended(suspended);
     updateCursorActive();
+    ++m_generation;
   }
 
   void EffectRegistry::removeOutput(const Output* output) {
+    const bool wasActive = m_ledger.active() > 0;
     m_ledger.removeOutput(output);
     if (m_pointerWlrOutput == output->wlr()) {
       m_pointerWlrOutput = nullptr;
+    }
+    // Views skip effect re-syncs while their own state stands still; the first
+    // and last active instances change what a settled view's sync would apply.
+    if (wasActive != (m_ledger.active() > 0)) {
+      ++m_generation;
     }
   }
 
@@ -268,16 +280,18 @@ vec4 animation(vec2 uv) {
     } else if (!fadeNeeded) {
       m_builtinFade.reset();
     }
-    if (!settings.animation.enabled || !settings.animation.windowsDrag.physics) {
+    if (!deformationEnabled(settings.animation)) {
       dropDeformation();
     } else if (!m_deformationCompiled) {
       m_deformationCompiled = true;
       m_deformation = {
-          fx_effect_shader_create(m_renderer, FX_EFFECT_ANIMATION, kDeformation, "animation.windows_drag"),
+          fx_effect_shader_create(m_renderer, FX_EFFECT_ANIMATION, kDeformation, "animation.deformation"),
           fx_effect_shader_unref
       };
       if (m_deformation == nullptr) {
-        kLog.error("the drag physics program failed to compile; dragged windows stay rigid");
+        kLog.error("the drag physics program failed to compile; dragged or resized windows stay rigid");
+      } else {
+        fx_effect_shader_set_bounded(m_deformation.get(), true);
       }
     }
     syncLightLayer();
@@ -285,6 +299,7 @@ vec4 animation(vec2 uv) {
     for (const auto& output : m_server->outputs()) {
       wlr_output_schedule_frame(output->wlr());
     }
+    ++m_generation;
   }
 
   void EffectRegistry::applyOutputEffects() {
@@ -315,7 +330,13 @@ vec4 animation(vec2 uv) {
 
   void EffectRegistry::updateInstance(const void* owner, const EffectInstanceState& state) {
     const unsigned before = m_ledger.eligible(state.output);
+    const bool wasActive = m_ledger.active() > 0;
     m_ledger.update(owner, state);
+    // Views skip effect re-syncs while their own state stands still; the first
+    // and last active instances change what a settled view's sync would apply.
+    if (wasActive != (m_ledger.active() > 0)) {
+      ++m_generation;
+    }
     if (before == 0 && m_ledger.eligible(state.output) > 0) {
       for (const auto& output : m_server->outputs()) {
         if (output.get() == state.output) {
@@ -325,7 +346,13 @@ vec4 animation(vec2 uv) {
     }
   }
 
-  void EffectRegistry::removeInstance(const void* owner) { m_ledger.remove(owner); }
+  void EffectRegistry::removeInstance(const void* owner) {
+    const bool wasActive = m_ledger.active() > 0;
+    m_ledger.remove(owner);
+    if (wasActive != (m_ledger.active() > 0)) {
+      ++m_generation;
+    }
+  }
 
   void EffectRegistry::retainRequirements(const fx_effect_requirements& requirements) {
     m_retainedPersistent += requirements.persistent ? 1U : 0U;
@@ -397,8 +424,7 @@ vec4 animation(vec2 uv) {
   }
 
   fx_effect_shader* EffectRegistry::deformationShader() const {
-    const Config::Animation& settings = config().animation;
-    return settings.enabled && settings.windowsDrag.physics ? m_deformation.get() : nullptr;
+    return deformationEnabled(config().animation) ? m_deformation.get() : nullptr;
   }
 
   const EffectPreset* EffectRegistry::animationPreset(AnimationEvent event) const {
@@ -450,6 +476,13 @@ vec4 animation(vec2 uv) {
 
   void bindAnimationEffect(wlr_scene_node* node, AnimationEvent event, const AnimatedColor& value, float direction) {
     bind(node, event, value, static_cast<float>(evaluateCurve(value.curve(), value.progress())), direction);
+  }
+
+  void clearAnimationEffect(wlr_scene_node* node, AnimationEvent event) {
+    if (node == nullptr) {
+      return;
+    }
+    wlr_scene_node_set_animation(node, static_cast<unsigned>(event), nullptr, nullptr);
   }
 
 } // namespace umbriel

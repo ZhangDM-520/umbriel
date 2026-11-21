@@ -18,7 +18,8 @@ namespace umbriel {
     // step. The shader's inverse lookup is a contraction with this factor.
     static constexpr float kContraction = 0.7F;
     using Sheet = std::array<std::array<float, 2>, kPoints>;
-    // Spring sheet tuning from `[animation.windows_drag]`; the defaults are the shipped values. Stiffness pulls each
+    // Spring sheet tuning from `[animation.windows_drag]` (shared with `[animation.windows_resize]`); the defaults
+    // are the shipped values. Stiffness pulls each
     // mass home, damping bleeds energy, coupling ties neighbouring masses, pointer response scales how far a motion
     // loads the sheet, max displacement caps its excursion, and settle-after-pause is the frame-stall threshold.
     struct Tuning {
@@ -43,12 +44,22 @@ namespace umbriel {
     // Carries the sheet onto a resized window or a moved grab point: displacements keep their size relative to the
     // window, and the new grab point is pinned.
     void resize(float width, float height, float grabX, float grabY);
+    // The edges a pointer resize drags. A corner grab sets two.
+    enum class ResizeEdge : uint8_t { None = 0, Top = 1, Bottom = 2, Left = 4, Right = 8 };
+    // Scales a committed size change before feeding move() during a resize grab.
+    static constexpr float kResizeResponse = 0.25F;
+    // The sheet's pin for a resize: the edge opposite every dragged one, at 0.5 on an axis with no dragged edge.
+    // Pinning the anchored edge keeps it pixel-exact; the dragged edge is the one that trails.
+    static std::array<float, 2> resizePin(ResizeEdge edges);
     // The grab point as fractions of the box the sheet spans, for a pointer at (localX, localY); the box and the
     // pointer share one coordinate space.
     static std::array<float, 2>
     grabIn(float boxX, float boxY, float boxWidth, float boxHeight, double localX, double localY);
     // Pointer delta in logical pixels since the previous call.
     void move(float dx, float dy);
+    // Committed box size delta (dw, dh) in logical pixels since the previous step, scaled by kResizeResponse and fed to
+    // move() along the dragged axes. An axis with no dragged edge is ignored.
+    void moveResize(float dw, float dh, ResizeEdge edges);
     void release();
     // Advances by `seconds` at a fixed 240 Hz step. A gap over the tuned settle threshold, and over twice the output
     // frame period `cadenceS` when it is known (> 0), settles immediately. Returns active().
@@ -89,5 +100,13 @@ namespace umbriel {
     bool m_grabbed = false;
     bool m_active = false;
   };
+
+  constexpr DragPhysics::ResizeEdge operator|(DragPhysics::ResizeEdge a, DragPhysics::ResizeEdge b) {
+    return static_cast<DragPhysics::ResizeEdge>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+  }
+
+  constexpr DragPhysics::ResizeEdge operator&(DragPhysics::ResizeEdge a, DragPhysics::ResizeEdge b) {
+    return static_cast<DragPhysics::ResizeEdge>(static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
+  }
 
 } // namespace umbriel

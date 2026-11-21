@@ -51,13 +51,29 @@ namespace umbriel {
       bool updateRestoreLocation = false;
     };
     Output* presentationOutput(std::string_view name, Output* fallback) const;
+    [[nodiscard]] bool visibleOn(const Output* output) const;
+    // Which pad is on screen on `output`, empty when none is.
+    [[nodiscard]] std::string_view visibleNameOn(const Output* output) const;
     Output* restoreOutputFor(const View* view) const;
     [[nodiscard]] bool moveToScratchpad(View* view, std::string_view name, Output* invokingOutput);
+    // Place a window the pointer dropped at (`dropX`, `dropY`) on `output` into the pad showing there, remembering
+    // `sourceWorkspace` as where a restore returns it. False when no pad is visible on that output, or the pad refuses
+    // the window.
+    [[nodiscard]] bool dropInto(View* view, Output* output, Workspace* sourceWorkspace, int dropX, int dropY);
+    // Take a member the pointer released back out of its pad, onto the active workspace of `output`. The release calls
+    // this only for a hidden pad, so the window does not vanish with the pad.
+    void dropOut(View* view, Output* output);
+    // Whether `view` is a member of a pad that is not showing. A visible pad follows a released member to the output
+    // it was dropped on, so only a hidden pad lets the window go.
+    [[nodiscard]] bool memberOfHiddenPad(const View* view) const;
+    // A member of `name` that the pointer is carrying, if any. A hidden pad has no focused member to name, so this is
+    // the window an action reaching that pad would disturb.
+    [[nodiscard]] View* carriedMember(std::string_view name) const;
     [[nodiscard]] bool
     assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
     [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
     // Launch context survives an empty pad. Explicit workspace focus relinquishes it on that output.
-    std::string_view activeOn(const Output* output) const;
+    [[nodiscard]] std::string_view activeOn(const Output* output) const;
     void deactivateOn(const Output* output);
     bool refocusActive(Output* output);
     // Show a scratchpad on the invoking output without changing keyboard focus. Naming `member` while the pad shows a
@@ -65,6 +81,18 @@ namespace umbriel {
     bool summon(std::string_view name, Output* invokingOutput, View* member = nullptr);
     bool toggle(std::string_view name, Output* invokingOutput);
     void hideAll();
+    // Remember the pads the overview is about to hide, so a gesture that never opens it can bring them back.
+    void beginOverviewDismissal();
+    // The overview settled open: the pads stay hidden and the record is dropped.
+    void commitOverviewDismissal();
+    // The overview never opened: show the pads it hid again, without their show fade.
+    void restoreOverviewDismissal();
+    // Whether a pad is on screen on `output`.
+    bool hasVisiblePad(const Output* output) const;
+    // The backdrop fade of the pad on `output`, 0 when none has drawn one yet.
+    float backdropFadeOn(const Output* output) const;
+    // Members of a visible pad on `output` that are on screen, in pad order.
+    std::vector<View*> visibleMembersOn(const Output* output) const;
     bool restoreFocused(std::string_view name);
     bool restoreToWorkspace(View* view, Workspace* workspace);
     bool focusNext(std::string_view name);
@@ -97,6 +125,13 @@ namespace umbriel {
     void reconcileConfig();
     // Return entries to the output they were parked on. Entries whose output is still gone park on `fallback`.
     size_t restoreDisplaced(Output* fallback);
+    // A member's close snapshot draws above the pad's dim and blur, in a layer of the pad tree. Nullptr leaves the
+    // capture where it is.
+    wlr_scene_tree* createCloseSnapshotLayer(Output* output);
+    // The manager drops the layer once the server reaps the snapshot.
+    void trackCloseSnapshot(CloseSnapshotId id, Output* output, wlr_scene_tree* layer);
+    // Drop a just-reaped snapshot's wrapper layer, called from the reap itself.
+    void forgetCloseSnapshot(CloseSnapshotId id);
 
   private:
     struct PendingSpawn {
@@ -108,6 +143,8 @@ namespace umbriel {
     struct Scratchpad {
       Output* output = nullptr;
       bool visible = false;
+      // The pad holds the seat and is the launch destination of its output. An empty pad keeps both while it shows,
+      // unless its last window left for a workspace.
       bool active = false;
       View* lastFocused = nullptr;
       // While visible, the one member shown in place of all of them; null when every member shows.
@@ -139,7 +176,9 @@ namespace umbriel {
     Entry* findEntry(const View* view);
     const Entry* findEntry(const View* view) const;
     bool hasEntries(std::string_view name) const;
-    bool visibleOn(Output* output) const;
+    // Whether the pad shown on `output` has a window to interact with, which is what makes its backdrop take pointer
+    // input. A hidden pad with members on the same output contributes nothing.
+    bool hasVisibleEntriesOn(const Output* output) const;
     // Whether `view`, a member of `scratchpad`, is on screen.
     static bool presents(const Scratchpad& scratchpad, const View* view);
     // Whether `view` is a dialog of another member of scratchpad `name`, shown along with that member.
@@ -150,7 +189,13 @@ namespace umbriel {
     // Called as `view` leaves scratchpad `name`: if it was the window focused last, a dialog hands that over to the
     // nearest window of the scratchpad it was opened from, and any other window clears it.
     void forgetLastFocused(Scratchpad& scratchpad, std::string_view name, const View* view) const;
-    enum class Admission { Interactive, Automatic };
+    // `Drop` is the pointer releasing a window: the one admission that applies to the view the grab is carrying.
+    enum class Admission { Interactive, Automatic, Drop };
+    // Whether the pointer is carrying `view`, which keeps it out of every pad until the button is released.
+    bool isCarried(const View* view) const;
+    // Whether a window leaving the pad dissolves in on its workspace, or lands fully visible because nothing of it is
+    // on screen.
+    enum class RestoreTransition { Snap, Animated };
     bool admit(
         View* view, std::string_view name, Output* invokingOutput, Admission admission,
         const AutomaticAdmission& options
@@ -164,9 +209,14 @@ namespace umbriel {
         View* view, const wlr_box& previousArea, const wlr_box& targetArea, bool proportionalSize,
         bool reposition = true
     );
-    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target = nullptr);
+    bool restoreView(
+        View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition,
+        bool allowCarried = false
+    );
     // Retarget the backdrop dim/blur fade for `output` and refresh its scene nodes.
     void retargetBackdrop(Output* output, bool visible, bool animateTransition = true);
+    // Push each tracked snapshot's current backdrop fade.
+    void syncTrackedCloseSnapshots();
     wlr_scene_rect* dimRectFor(Output* output);
     wlr_scene_blur* blurNodeFor(Output* output);
     void updateDimAndBlur(Output* output);
@@ -177,6 +227,21 @@ namespace umbriel {
     std::vector<Entry> m_entries;
     // Views mid fade-out on hide, still enabled until tickAnimations disables the node once the fade completes.
     std::vector<View*> m_hidingViews;
+    struct TrackedCloseSnapshot {
+      CloseSnapshotId id = kInvalidCloseSnapshot;
+      Output* output = nullptr;
+      wlr_scene_tree* layer = nullptr;
+    };
+    std::vector<TrackedCloseSnapshot> m_trackedCloseSnapshots;
+    // A pad the overview hid for the opening in flight, with the state that hiding clears.
+    struct OverviewHidden {
+      std::string name;
+      View* solo = nullptr;
+      bool active = false;
+      View* lastFocused = nullptr;
+    };
+    // Empty once the opening settles or is cancelled.
+    std::vector<OverviewHidden> m_overviewHidden;
     std::unordered_map<Output*, wlr_scene_rect*> m_dimRects;
     std::unordered_map<Output*, wlr_scene_blur*> m_blurNodes;
     std::unordered_map<Output*, AnimatedValue> m_backdropFades;

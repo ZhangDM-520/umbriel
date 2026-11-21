@@ -145,6 +145,7 @@ namespace umbriel {
   class Gestures;
   class ColorManager;
   struct ColorDescription;
+  class BackgroundEffectManager;
   class SyncobjAcquireBarrier;
   class SyncobjSupersededRelease;
   class SyncobjUnmapRelease;
@@ -207,6 +208,7 @@ namespace umbriel {
     bool outputCaptured(const wlr_output* output) const;
     wlr_tearing_control_manager_v1* tearingControlManager() const { return m_tearingControlManager; }
     ColorManager* colorManager() const { return m_colorManager.get(); }
+    BackgroundEffectManager* backgroundEffect() const { return m_backgroundEffect.get(); }
     const ColorDescription* surfaceImageDescription(wlr_surface* surface) const;
     const ColorDescription* surfaceTreeHdrDescription(wlr_surface* surface) const;
     void updateColorPreferences();
@@ -458,6 +460,10 @@ namespace umbriel {
     // Re-send every surface's output scale (views, layer surfaces, popups). Run after anything that changes an output's
     // scale or moves surfaces between outputs outside setWorkspace; the notifies dedup, so extra calls are cheap.
     void refreshSurfaceScales();
+    void applyDownsampleMode();
+    // The configured minified-sampling policy as a scene mode, for scenes
+    // outside m_scene (window-capture mirrors) that must follow it too.
+    [[nodiscard]] enum wlr_scene_downsample_mode sceneDownsampleMode();
     // Re-evaluate each output's policy after keyboard focus or a dynamic window rule changes.
     void refreshOutputPolicies();
     wlr_output* preferredOutput() const;
@@ -545,6 +551,8 @@ namespace umbriel {
     void presentCloseSnapshot(CloseSnapshotId id, int canvasX, int canvasY, bool visible);
     // False once the snapshot has been reaped.
     bool closeSnapshotAlive(CloseSnapshotId id) const;
+    // Fold an owner's fade (a scratchpad's backdrop) into a snapshot's opacity. A reaped id is a no-op.
+    void setCloseSnapshotFade(CloseSnapshotId id, float multiplier);
     // End a held snapshot; it is reaped at the end of the current animation tick.
     void releaseCloseSnapshot(CloseSnapshotId id);
 
@@ -767,6 +775,7 @@ namespace umbriel {
     wlr_content_type_manager_v1* m_contentTypeManager = nullptr;
     wlr_security_context_manager_v1* m_securityContextManager = nullptr;
     std::unique_ptr<ColorManager> m_colorManager;
+    std::unique_ptr<BackgroundEffectManager> m_backgroundEffect;
     std::unique_ptr<SyncobjAcquireBarrier> m_syncobjAcquireBarrier;
     std::unique_ptr<SyncobjUnmapRelease> m_syncobjUnmapRelease;
     std::unique_ptr<SyncobjSupersededRelease> m_syncobjSupersededRelease;
@@ -854,6 +863,7 @@ namespace umbriel {
       // Place the captured box at a canvas origin in output-root coordinates, or hide it while its workspace is not
       // showing.
       void present(int canvasX, int canvasY, bool visible);
+      void setFadeMultiplier(float multiplier);
 
       AnimationPhase animationPhase() const override { return AnimationPhase::Overlays; }
       bool tickAnimations(double nowMsec) override;
@@ -863,6 +873,8 @@ namespace umbriel {
     private:
       void applyPresentation();
       void applyShrink(int width, int height);
+      // Push lifecycle alpha times the owner's fade into every captured node.
+      void applyOpacity();
 
       Server* m_server = nullptr;
       CloseSnapshotId m_id = kInvalidCloseSnapshot;
@@ -917,11 +929,15 @@ namespace umbriel {
       int m_shadowWidth = 0;
       int m_shadowHeight = 0;
       wlr_box m_shadowHole{};
+      // An owner's fade (a scratchpad backdrop), independent of the snapshot's own timeline.
+      float m_fadeMultiplier = 1.0F;
     };
     // unique_ptr because the registry holds raw pointers to these: a vector of
     // values would move them out from under it on reallocation.
     std::vector<std::unique_ptr<CloseSnapshot>> m_closeSnapshots;
     CloseSnapshotId m_nextCloseSnapshotId = 1;
+    // Ids reaped this pass, so an owner can drop its wrapper layer once the snapshot's trees are gone.
+    std::vector<CloseSnapshotId> m_reapedSnapshotsScratch;
     std::vector<Animatable*> m_animatables;
     std::vector<Animatable*> m_animatablesScratch;
 

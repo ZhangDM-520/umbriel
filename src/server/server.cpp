@@ -30,6 +30,7 @@
 #include "scene/quit_confirm.h"
 #include "server/allocator.h"
 #include "server/backend_manager.h"
+#include "server/background_effect.h"
 #include "server/color_manager.h"
 #include "server/drm_lease.h"
 #include "server/ipc.h"
@@ -73,7 +74,7 @@ namespace umbriel {
     // Security-context clients only receive reviewed, ordinary application
     // protocols. New globals stay unavailable until they are classified here.
     // [[security_context_rule]] widens the set for matching clients.
-    constexpr std::array<std::string_view, 33> kAllowedSecurityContextGlobals{
+    constexpr std::array<std::string_view, 34> kAllowedSecurityContextGlobals{
         "wl_shm",
         "wl_drm",
         "zwp_linux_dmabuf_v1",
@@ -107,6 +108,7 @@ namespace umbriel {
         "wl_seat",
         "wp_cursor_shape_manager_v1",
         "zwp_text_input_manager_v3",
+        "ext_background_effect_manager_v1",
     };
 
     bool isAllowedSecurityContextGlobal(std::string_view interface) {
@@ -793,6 +795,21 @@ namespace umbriel {
       throw std::runtime_error(std::string("umbrielfx scene helpers are not linked correctly: ") + mismatch);
     }
     m_scene = wlr_scene_create();
+    // Surface scale hints carry each output's render scale, not its own scale:
+    // clients supersample while the scene samples down to the `scale` raster.
+    wlr_scene_set_preferred_scale_provider(
+        m_scene,
+        [](wlr_output* output, wlr_surface* surface, void* data) -> double {
+          auto* server = static_cast<Server*>(data);
+          const Output* bound = server->outputFromWlr(output);
+          // Unbound outputs are capture mirrors and must not drive hints.
+          // Same per-surface answer as Output::notifySurfaceScaleIter.
+          return bound != nullptr ? bound->surfaceRenderScale(surface) : -1.0;
+        },
+        this
+    );
+    // Minified buffers sample with the configured method (box by default).
+    applyDownsampleMode();
     if (linuxDmabuf != nullptr) {
       wlr_scene_set_linux_dmabuf_v1(m_scene, linuxDmabuf);
     }
@@ -801,6 +818,13 @@ namespace umbriel {
       if (!m_colorManager->valid()) {
         throw std::runtime_error("failed to create color-management manager");
       }
+    }
+    // Client-requested backdrop blur (ext_background_effect_v1). Created after
+    // the compositor so ext-background-effect's surfaces can be looked up, and
+    // before any client can bind it.
+    m_backgroundEffect = std::make_unique<BackgroundEffectManager>(m_display);
+    if (m_backgroundEffect->global() == nullptr) {
+      throw std::runtime_error("failed to create ext-background-effect manager");
     }
     const Config::Appearance::Blur& blur = config().appearance.blur;
     wlr_scene_set_blur_data(
@@ -1187,6 +1211,7 @@ namespace umbriel {
     wl_display_destroy_clients(m_display);
     m_drmLeaseManager.reset();
     m_colorManager.reset();
+    m_backgroundEffect.reset();
     m_syncobjAcquireBarrier.reset();
     m_syncobjUnmapRelease.reset();
     m_syncobjSupersededRelease.reset();
@@ -2030,13 +2055,38 @@ namespace umbriel {
     if (!movedAlpha && !movedSlide) {
       return false;
     }
+    applyOpacity();
+
+    applyPresentation();
+    if (m_blurBackground && m_output != nullptr) {
+      m_output->markBlurBackgroundDirty();
+    }
+    return m_alpha.animating() || m_slide.animating();
+  }
+
+  void Server::CloseSnapshot::setFadeMultiplier(float multiplier) {
+    const float clamped = std::clamp(multiplier, 0.0F, 1.0F);
+    if (clamped == m_fadeMultiplier) {
+      return;
+    }
+    m_fadeMultiplier = clamped;
+    // A held snapshot shows its captured frame unchanged.
+    if (!m_held) {
+      applyOpacity();
+    }
+  }
+
+  void Server::CloseSnapshot::applyOpacity() {
     // Overshooting curves can push this out of range; wlr_scene_buffer_set_opacity asserts opacity is in [0, 1].
     const float rawAlpha = std::clamp(static_cast<float>(m_alpha.current()), 0.0F, 1.0F);
-    // A lifecycle shader fades the whole snapshot at once, so its buffers and borders stay opaque under it.
+    // A lifecycle shader fades the whole snapshot, so its nodes stay opaque under it. An owner's multiplier still
+    // attenuates them individually inside that composite: the shader API has no group-opacity uniform, so a pad hide
+    // fades each node's contribution rather than the composed frame (equal for a single surface, visible on seams).
     const bool composited = effectRegistry().lifecycleEffect(m_event) != nullptr;
     const bool builtInSlide = !composited && m_slide.target() != m_slide.from();
     // Keep the moving snapshot visible long enough for slide to read as motion. Fade keeps the configured timeline.
-    const float alpha = composited ? 1.0F : (builtInSlide ? std::sqrt(rawAlpha) : rawAlpha);
+    const float lifecycle = composited ? 1.0F : (builtInSlide ? std::sqrt(rawAlpha) : rawAlpha);
+    const float alpha = lifecycle * m_fadeMultiplier;
     for (const Buffer& buffer : m_buffers) {
       wlr_scene_buffer_set_opacity(buffer.node, std::clamp(buffer.baseOpacity * alpha, 0.0F, 1.0F));
     }
@@ -2060,15 +2110,9 @@ namespace umbriel {
 
     if (m_shadow.node != nullptr) {
       auto color = m_shadow.color;
-      color[3] *= builtInSlide ? alpha : rawAlpha;
+      color[3] *= (builtInSlide ? lifecycle : rawAlpha) * m_fadeMultiplier;
       wlr_scene_shadow_set_color(m_shadow.node, color.data());
     }
-
-    applyPresentation();
-    if (m_blurBackground && m_output != nullptr) {
-      m_output->markBlurBackgroundDirty();
-    }
-    return m_alpha.animating() || m_slide.animating();
   }
 
   void Server::registerAnimatable(Animatable* animatable) {
@@ -2107,13 +2151,21 @@ namespace umbriel {
 
     // A snapshot only exists while fading out, so a settled one is finished.
     // Erasing destroys its scene tree and unregisters it.
+    m_reapedSnapshotsScratch.clear();
     std::erase_if(m_closeSnapshots, [this](const std::unique_ptr<CloseSnapshot>& snap) {
       if (snap->hasActiveAnimations()) {
         return false;
       }
+      m_reapedSnapshotsScratch.push_back(snap->id());
       unregisterAnimatable(snap.get());
       return true;
     });
+    // The erased snapshots destroyed their own trees, so an owner's wrapper layer is empty.
+    if (m_scratchpadManager != nullptr) {
+      for (const CloseSnapshotId id : m_reapedSnapshotsScratch) {
+        m_scratchpadManager->forgetCloseSnapshot(id);
+      }
+    }
     return active;
   }
 
@@ -2316,6 +2368,15 @@ namespace umbriel {
     for (const auto& snapshot : m_closeSnapshots) {
       if (snapshot->id() == id) {
         snapshot->present(canvasX, canvasY, visible);
+        return;
+      }
+    }
+  }
+
+  void Server::setCloseSnapshotFade(CloseSnapshotId id, float multiplier) {
+    for (const auto& snapshot : m_closeSnapshots) {
+      if (snapshot->id() == id) {
+        snapshot->setFadeMultiplier(multiplier);
         return;
       }
     }

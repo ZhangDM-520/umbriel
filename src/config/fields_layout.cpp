@@ -19,12 +19,15 @@
 namespace umbriel {
 
   const registry::Choices<LayoutMode>& layoutModes() {
-    static const registry::Choices<LayoutMode> choices{
-        {.name = "scrolling", .value = LayoutMode::Scrolling},
-        {.name = "dwindle", .value = LayoutMode::Dwindle},
-        {.name = "master", .value = LayoutMode::Master},
-        {.name = "stacking", .value = LayoutMode::Stacking},
-    };
+    static const registry::Choices<LayoutMode> choices = [] {
+      registry::Choices<LayoutMode> table;
+      const std::span<const std::string_view> names = layoutModeNames();
+      table.reserve(names.size());
+      for (size_t index = 0; index < names.size(); ++index) {
+        table.push_back({.name = names[index], .value = static_cast<LayoutMode>(index)});
+      }
+      return table;
+    }();
     return choices;
   }
 
@@ -44,6 +47,15 @@ namespace umbriel {
           {.name = "never", .value = CenterFocusedColumn::Never},
           {.name = "always", .value = CenterFocusedColumn::Always},
           {.name = "on_overflow", .value = CenterFocusedColumn::OnOverflow},
+      };
+      return choices;
+    }
+
+    const registry::Choices<UnderfullStripAlign>& underfullStripAligns() {
+      static const registry::Choices<UnderfullStripAlign> choices{
+          {.name = "start", .value = UnderfullStripAlign::Start},
+          {.name = "center", .value = UnderfullStripAlign::Center},
+          {.name = "end", .value = UnderfullStripAlign::End},
       };
       return choices;
     }
@@ -174,7 +186,7 @@ namespace umbriel {
       };
       static const Fields<Scrolling> scrolling{
           real("default_extent_fraction", 0.1, kMaxWideFraction, &Scrolling::defaultExtentFraction),
-          boolean("center_underfull_strip", &Scrolling::centerUnderfullStrip),
+          choice("underfull_strip", &Scrolling::underfullStrip, underfullStripAligns()),
           choice("center_focused", &Scrolling::centerFocused, centerFocusedModes()),
           boolean("center_on_overview_select", &Scrolling::centerOnOverviewSelect),
       };
@@ -413,10 +425,15 @@ namespace umbriel {
   } // namespace
 
   const registry::Choices<ColumnDisplay>& columnDisplays() {
-    static const registry::Choices<ColumnDisplay> choices{
-        {.name = "normal", .value = ColumnDisplay::Normal},
-        {.name = "tabbed", .value = ColumnDisplay::Tabbed},
-    };
+    static const registry::Choices<ColumnDisplay> choices = [] {
+      registry::Choices<ColumnDisplay> table;
+      const std::span<const std::string_view> names = columnDisplayNames();
+      table.reserve(names.size());
+      for (size_t index = 0; index < names.size(); ++index) {
+        table.push_back({.name = names[index], .value = static_cast<ColumnDisplay>(index)});
+      }
+      return table;
+    }();
     return choices;
   }
 

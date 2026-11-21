@@ -461,23 +461,35 @@ namespace umbriel {
     return true;
   }
 
-  int ScrollingLayout::centeringOffset(int viewportPrimary) const {
-    if (!m_config->scrolling.centerUnderfullStrip) {
-      return 0;
-    }
-    // When the tiled row is narrower than the viewport, split the leftover
-    // space evenly on both sides.
+  int ScrollingLayout::stripAlignOffset(int viewportPrimary) const {
+    // A strip wider than the viewport starts at 0 and is read through scrolling; only the leftover space of a
+    // narrower one is distributed by the alignment.
     const int total = rawTotalWidth(viewportPrimary);
     if (total >= viewportPrimary) {
       return 0;
     }
-    return (viewportPrimary - total) / 2;
+    const int slack = viewportPrimary - total;
+    switch (m_config->scrolling.underfullStrip) {
+    case UnderfullStripAlign::Start:
+      return 0;
+    case UnderfullStripAlign::Center:
+      return slack / 2;
+    case UnderfullStripAlign::End:
+      return slack;
+    }
+    return 0;
+  }
+
+  bool ScrollingLayout::stripFitsViewport() const {
+    // Cached by arrange: between an output or workspace move and the next arrange this can lag the live viewport,
+    // which at worst masks a resize edge for one frame. Drags re-arrange every step, so it is current while it matters.
+    return m_lastViewportPrimary > 0 && rawTotalWidth(m_lastViewportPrimary) < m_lastViewportPrimary;
   }
 
   int ScrollingLayout::columnX(int columnIndex, int viewportPrimary) const {
     const int end = std::clamp(columnIndex, 0, static_cast<int>(m_columns.size()));
     const int gap = m_config->totalGap;
-    int x = centeringOffset(viewportPrimary);
+    int x = stripAlignOffset(viewportPrimary);
     for (int i = 0; i < end; ++i) {
       const ColumnBleed bleed = columnBleed(m_columns[static_cast<size_t>(i)], *this);
       x += bleed.before + columnWidth(i, viewportPrimary) + gap + bleed.after;
@@ -828,6 +840,11 @@ namespace umbriel {
     eraseRow(column, static_cast<size_t>(rowOf(view)));
     if (column.views.empty()) {
       m_columns.erase(m_columns.begin() + columnIndex);
+      if (m_lastFocusedColumn > columnIndex) {
+        --m_lastFocusedColumn;
+      } else if (m_lastFocusedColumn == columnIndex) {
+        m_lastFocusedColumn = -1;
+      }
       if (m_removedFocusedColumn == columnIndex) {
         m_pendingRemovalReevaluate = true;
       }
@@ -1183,7 +1200,7 @@ namespace umbriel {
 
     const int gap = m_config->totalGap;
     // columnX() re-sums every prior column each call; keep a running x instead of calling it per column.
-    int runningColumnX = centeringOffset(viewportPrimary);
+    int runningColumnX = stripAlignOffset(viewportPrimary);
     for (size_t columnIndex = 0; columnIndex < m_columns.size(); ++columnIndex) {
       Column& column = m_columns[columnIndex];
       const ColumnBleed bleed = columnBleed(column, *this);
@@ -1564,13 +1581,14 @@ namespace umbriel {
       ScrollingResizeGrab(
           ScrollingLayout* layout, int column, int row, uint32_t edges, bool vertical, bool soloPrimary,
           bool clearedFullWidth, double startScroll, int startColumnX, int startPrimaryPx, int startPrevPrimaryPx,
-          int startStripPrimaryPx, int upperRow, int lowerRow, double startUpperWeight, double startLowerWeight
+          int startNextPrimaryPx, int startStripPrimaryPx, int upperRow, int lowerRow, double startUpperWeight,
+          double startLowerWeight
       )
           : m_layout(layout), m_column(column), m_row(row), m_edges(edges), m_vertical(vertical),
             m_soloPrimary(soloPrimary), m_clearedFullWidth(clearedFullWidth), m_startScroll(startScroll),
             m_startColumnX(startColumnX), m_startPrimaryPx(startPrimaryPx), m_startPrevPrimaryPx(startPrevPrimaryPx),
-            m_startStripPrimaryPx(startStripPrimaryPx), m_upperRow(upperRow), m_lowerRow(lowerRow),
-            m_startUpperWeight(startUpperWeight), m_startLowerWeight(startLowerWeight) {}
+            m_startNextPrimaryPx(startNextPrimaryPx), m_startStripPrimaryPx(startStripPrimaryPx), m_upperRow(upperRow),
+            m_lowerRow(lowerRow), m_startUpperWeight(startUpperWeight), m_startLowerWeight(startLowerWeight) {}
 
       bool unmaximizeOnBegin() const override { return m_clearedFullWidth; }
 
@@ -1639,8 +1657,37 @@ namespace umbriel {
           const double fraction = static_cast<double>(extent + gap) / static_cast<double>(viewportPrimary + gap);
           layout.setWidthFraction(columnIndex, fraction);
         };
-        const bool centerUnderfullStrip =
-            m_startStripPrimaryPx < viewportPrimary && layout.layoutConfig()->scrolling.centerUnderfullStrip;
+        const UnderfullStripAlign align = layout.layoutConfig()->scrolling.underfullStrip;
+        const bool underfullStrip = m_startStripPrimaryPx < viewportPrimary;
+        // Centering travels both outer edges around a fixed midpoint. The start and end alignments pin one edge
+        // through the alignment offset instead, so only the free edge follows the pointer.
+        const bool symmetricGrowth = underfullStrip && align == UnderfullStripAlign::Center;
+        const bool endAlignedRest = underfullStrip && align == UnderfullStripAlign::End;
+        // A drag on the boundary between two lanes keeps their pair span fixed, so one lane gives every pixel the
+        // other takes. Past the pointer-side lane's own minimum the far lane grows instead, which is the only way
+        // the boundary can keep following the pointer; callers re-anchor the strip in that case.
+        struct PairResize {
+          int lead = 0;
+          int trail = 0;
+          bool grew = false;
+        };
+        auto resizePair = [&](int leadIndex, int trailIndex, int leadStart, int trailStart,
+                              int requestedLead) -> PairResize {
+          const int span = leadStart + gap + trailStart;
+          const int minLead = columnMinPrimary(leadIndex);
+          const int minTrail = columnMinPrimary(trailIndex);
+          const int maxTrail = columnMaxPrimary(trailIndex);
+          const int minimumLead = std::max(minLead, span - gap - maxTrail);
+          const int maximumLead = std::min(columnMaxPrimary(leadIndex), span - gap - minTrail);
+          PairResize result;
+          result.lead = std::clamp(requestedLead, minimumLead, maximumLead);
+          result.trail = span - gap - result.lead;
+          if (requestedLead < minimumLead && minimumLead == minLead) {
+            result.trail = std::min(trailStart - (requestedLead - leadStart), maxTrail);
+            result.grew = true;
+          }
+          return result;
+        };
         const double centeredEdgeTravel =
             std::max(0.0, static_cast<double>(viewportPrimary - m_startStripPrimaryPx) / 2.0);
         auto centeredPrimaryDelta = [centeredEdgeTravel](double edgeDelta) {
@@ -1648,56 +1695,66 @@ namespace umbriel {
         };
 
         if ((m_edges & primaryEndEdge) != 0) {
-          // While the strip fits, its center stays fixed. A boundary extent changes
-          // by two pointer pixels for each pixel the centered outer edge moves.
-          const double extentDelta = centerUnderfullStrip ? centeredPrimaryDelta(dPrimary) : dPrimary;
-          const int newExtent = std::clamp(
-              m_startPrimaryPx + static_cast<int>(std::lround(extentDelta)), columnMinPrimary(m_column),
-              columnMaxPrimary(m_column)
-          );
-          setColumnPrimaryPx(m_column, newExtent);
-          if (centerUnderfullStrip) {
-            layout.setScroll(0.0);
-          } else {
-            layout.setScroll(
-                m_startScroll + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
+          if (endAlignedRest && m_column + 1 < static_cast<int>(layout.columns().size())) {
+            // Interior boundary of an end-aligned fitting strip: the pair keeps its span, so the anchored trailing
+            // edge stays put and the boundary follows the pointer. Centered strips keep their pre-existing
+            // symmetric growth instead.
+            const PairResize pair = resizePair(
+                m_column, m_column + 1, m_startPrimaryPx, m_startNextPrimaryPx,
+                m_startPrimaryPx + static_cast<int>(std::lround(dPrimary))
             );
-          }
-        } else if ((m_edges & primaryStartEdge) != 0) {
-          if (m_column > 0 && !m_soloPrimary) {
-            // Shared boundary with the previous lane: keep the pair span fixed.
-            const int pair = m_startPrevPrimaryPx + gap + m_startPrimaryPx;
-            const int minPrev = columnMinPrimary(m_column - 1);
-            const int minCur = columnMinPrimary(m_column);
-            const int maxPrev = columnMaxPrimary(m_column - 1);
-            const int maxCur = columnMaxPrimary(m_column);
-            const int requestedPrev = m_startPrevPrimaryPx + static_cast<int>(std::lround(dPrimary));
-            const int minimumPrev = std::max(minPrev, pair - gap - maxCur);
-            const int maximumPrev = std::min(maxPrev, pair - gap - minCur);
-            const int newPrev = std::clamp(requestedPrev, minimumPrev, maximumPrev);
-            int newCur = pair - gap - newPrev;
-            const bool growsPastPreviousMinimum = requestedPrev < minimumPrev && minimumPrev == minPrev;
-            if (growsPastPreviousMinimum) {
-              newCur = std::min(m_startPrimaryPx - static_cast<int>(std::lround(dPrimary)), maxCur);
-            }
-            setColumnPrimaryPx(m_column - 1, newPrev);
-            setColumnPrimaryPx(m_column, newCur);
-            if (growsPastPreviousMinimum) {
-              layout.setScroll(
-                  m_startScroll
-                      + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
-                      + static_cast<double>(newCur - m_startPrimaryPx),
-                  true
-              );
+            setColumnPrimaryPx(m_column, pair.lead);
+            setColumnPrimaryPx(m_column + 1, pair.trail);
+            if (pair.grew) {
+              // The pair grew, so the strip re-anchors; nothing else can keep the boundary on the pointer.
+              layout.setScroll(0.0);
             }
           } else {
-            const double extentDelta = centerUnderfullStrip ? centeredPrimaryDelta(-dPrimary) : -dPrimary;
+            // While the strip fits, centering keeps its midpoint fixed: a boundary extent changes by two pointer
+            // pixels for each pixel the centered outer edge moves. An aligned rest keeps its anchored edge instead.
+            const double extentDelta = symmetricGrowth ? centeredPrimaryDelta(dPrimary) : dPrimary;
             const int newExtent = std::clamp(
                 m_startPrimaryPx + static_cast<int>(std::lround(extentDelta)), columnMinPrimary(m_column),
                 columnMaxPrimary(m_column)
             );
             setColumnPrimaryPx(m_column, newExtent);
-            if (centerUnderfullStrip) {
+            if (symmetricGrowth || endAlignedRest) {
+              // Centering keeps the midpoint; an anchored alignment re-rests on its edge (the layout refuses that
+              // boundary while it fits, see sanitizeResizeEdges, so this covers a programmatic resize).
+              layout.setScroll(0.0);
+            } else {
+              layout.setScroll(
+                  m_startScroll + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
+              );
+            }
+          }
+        } else if ((m_edges & primaryStartEdge) != 0) {
+          if (m_column > 0 && !m_soloPrimary) {
+            // Shared boundary with the previous lane: keep the pair span fixed.
+            const PairResize pair = resizePair(
+                m_column - 1, m_column, m_startPrevPrimaryPx, m_startPrimaryPx,
+                m_startPrevPrimaryPx + static_cast<int>(std::lround(dPrimary))
+            );
+            setColumnPrimaryPx(m_column - 1, pair.lead);
+            setColumnPrimaryPx(m_column, pair.trail);
+            if (pair.grew) {
+              layout.setScroll(
+                  m_startScroll
+                      + static_cast<double>(layout.columnX(m_column, viewportPrimary) - m_startColumnX)
+                      + static_cast<double>(pair.trail - m_startPrimaryPx),
+                  true
+              );
+            }
+          } else {
+            const double extentDelta = symmetricGrowth ? centeredPrimaryDelta(-dPrimary) : -dPrimary;
+            const int newExtent = std::clamp(
+                m_startPrimaryPx + static_cast<int>(std::lround(extentDelta)), columnMinPrimary(m_column),
+                columnMaxPrimary(m_column)
+            );
+            setColumnPrimaryPx(m_column, newExtent);
+            if (symmetricGrowth || endAlignedRest) {
+              // Centering keeps the midpoint; an end-aligned strip keeps its trailing edge, which the offset
+              // re-derives from the new total width.
               layout.setScroll(0.0);
             } else {
               layout.setScroll(
@@ -1796,6 +1853,7 @@ namespace umbriel {
       int m_startColumnX;
       int m_startPrimaryPx;
       int m_startPrevPrimaryPx;
+      int m_startNextPrimaryPx;
       int m_startStripPrimaryPx;
       // First rows of the units either side of the dragged boundary; -1 for the column's edge gap there.
       int m_upperRow;
@@ -1816,8 +1874,20 @@ namespace umbriel {
 
   uint32_t ScrollingLayout::sanitizeResizeEdges(const View* view, uint32_t edges) const {
     const int columnIndex = columnOf(view);
-    if (columnIndex == 0 && !m_config->scrolling.centerUnderfullStrip) {
-      edges &= ~(vertical() ? WLR_EDGE_TOP : WLR_EDGE_LEFT);
+    const uint32_t startEdge = vertical() ? WLR_EDGE_TOP : WLR_EDGE_LEFT;
+    const uint32_t endEdge = vertical() ? WLR_EDGE_BOTTOM : WLR_EDGE_RIGHT;
+    // A start-aligned strip begins at the viewport edge, so its first column can only grow away from it.
+    if (columnIndex == 0 && m_config->scrolling.underfullStrip == UnderfullStripAlign::Start) {
+      edges &= ~startEdge;
+    }
+    // An end-aligned strip that fits rests against the trailing viewport edge: growing the last column from its
+    // trailing edge would push the strip past that edge, so it resizes from its leading edge. An interior trailing
+    // boundary takes width from the next lane instead, so it stays draggable. Once the strip overflows, the alignment
+    // no longer applies and both edges resize as usual.
+    if (columnIndex == static_cast<int>(m_columns.size()) - 1
+        && m_config->scrolling.underfullStrip == UnderfullStripAlign::End
+        && stripFitsViewport()) {
+      edges &= ~endEdge;
     }
     return edges;
   }
@@ -1852,6 +1922,10 @@ namespace umbriel {
     if (column > 0 && !soloPrimary) {
       startPrevPrimaryPx = columnWidth(column - 1, viewportPrimary);
     }
+    int startNextPrimaryPx = 0;
+    if (column + 1 < static_cast<int>(m_columns.size()) && !soloPrimary) {
+      startNextPrimaryPx = columnWidth(column + 1, viewportPrimary);
+    }
     const double startScroll = scroll();
 
     // The boundary dragged lies between the unit holding the window, which may be a tab group, and the unit or edge gap
@@ -1879,7 +1953,8 @@ namespace umbriel {
 
     return std::make_unique<ScrollingResizeGrab>(
         this, column, row, edges, v, soloPrimary, clearedFullWidth, startScroll, startColumnX, startPrimaryPx,
-        startPrevPrimaryPx, rawTotalWidth(viewportPrimary), upperRow, lowerRow, startUpperWeight, startLowerWeight
+        startPrevPrimaryPx, startNextPrimaryPx, rawTotalWidth(viewportPrimary), upperRow, lowerRow, startUpperWeight,
+        startLowerWeight
     );
   }
 

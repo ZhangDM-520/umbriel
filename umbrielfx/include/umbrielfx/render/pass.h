@@ -8,6 +8,7 @@
 #include <GLES2/gl2.h>
 #include <stdbool.h>
 #include <umbrielfx/render/effect.h>
+#include <umbrielfx/render/fx_renderer/fx_offscreen_buffers.h>
 #include <wlr/render/color.h>
 #include <wlr/render/interface.h>
 #include <wlr/render/pass.h>
@@ -44,6 +45,9 @@ struct fx_gles_render_pass {
   // Set while an add_* call renders into an offscreen buffer instead of the
   // pass target, so it must not extend updated_region.
   bool suppress_updated;
+  // Set while drawing to a scratch target or stencil mask so capture-cleanliness
+  // tracking does not treat internal passes as visible draws in the active capture.
+  bool suppress_capture_draws;
   // Reject the frame instead of displaying a partially applied animation.
   bool require_animation_success;
   bool animation_failed;
@@ -52,6 +56,7 @@ struct fx_gles_render_pass {
   // The region where there's blur
   pixman_region32_t blur_padding_region;
   bool has_blur;
+  bool skip_optimized_no_blur;
   // Contains output-specific framebuffers.
   // NULL when no advanced effects like blur is being used in the current pass.
   // Call `fx_render_pass_init_offscreen_buffers` to use advanced effects.
@@ -64,11 +69,14 @@ struct fx_gles_render_pass {
   struct fx_framebuffer* animation_parents[FX_ANIMATION_DEPTH];
   struct wlr_texture* animation_textures[FX_ANIMATION_DEPTH];
   bool animation_suppress[FX_ANIMATION_DEPTH];
+  bool animation_has_draws[FX_ANIMATION_DEPTH];
   struct wlr_box animation_boxes[FX_ANIMATION_DEPTH];
   // One past the capture index of the open group capture, or 0. Captures
   // inside it allocate from the offscreen group set.
   unsigned group_depth;
   bool group_used;
+  bool trim_output_animation_buffers;
+  struct fx_animation_buffer_usage output_animation_used;
   struct wl_list animation_history_updates;
   // The target's unfiltered composition was copied into the output buffer's
   // effect capture; it becomes readable once the pass submits.
@@ -80,6 +88,9 @@ struct fx_gles_render_pass {
 };
 
 bool fx_render_pass_begin_animation(struct fx_gles_render_pass* pass);
+// Opens a node-scoped capture over `box` in parent buffer pixels; callers must
+// translate subtree draws and damage by (-box->x, -box->y).
+bool fx_render_pass_begin_animation_box(struct fx_gles_render_pass* pass, const struct wlr_box* box);
 bool fx_render_pass_begin_isolation(struct fx_gles_render_pass* pass);
 void fx_render_pass_cancel_isolation(struct fx_gles_render_pass* pass);
 // Opens the pass's single group capture. box is in parent pixels; translate
@@ -88,6 +99,8 @@ bool fx_render_pass_begin_capture(struct fx_gles_render_pass* pass, const struct
 void fx_render_pass_end_capture(
     struct fx_gles_render_pass* pass, const struct wlr_box* box, const pixman_region32_t* clip
 );
+// Records that a captured shadow caster was reused instead of re-rendered, for tests.
+void fx_render_pass_note_shadow_caster_reuse(struct fx_gles_render_pass* pass);
 // `box` and `logical_box` are the node's boxes; `expand` (logical px) grows the
 // drawn rectangle on every side. `uv` in the program spans the drawn rectangle.
 void fx_render_pass_end_animation(
@@ -97,10 +110,12 @@ void fx_render_pass_end_animation(
 );
 
 // Consume the current capture as a shadow caster. Always restores the parent
-// target, including on allocation failure. False requests the analytic fallback.
+// target, including on allocation failure. When `out_caster` is non-NULL and
+// the shadow renders, ownership of the caster texture transfers to `*out_caster`
+// instead of destroying it. False requests the analytic fallback.
 bool fx_render_pass_end_animation_shadow(
     struct fx_gles_render_pass* pass, float softness, float offset_x, float offset_y, const float color[4],
-    const pixman_region32_t* clip
+    const pixman_region32_t* clip, struct wlr_texture** out_caster
 );
 
 struct fx_gradient {
@@ -141,6 +156,12 @@ struct fx_render_texture_options {
   // decode when one of these is set.
   float transfer_function_power;
   struct wlr_color_transform* decode_transform;
+  // Area (box) averaging for a minified source instead of the single-tap
+  // fetch. The pass derives the per-axis footprint from the source and
+  // destination extents; up to 4:1 on an axis every texel that axis covers is
+  // weighted by its area in linear light. Only set when the draw is actually
+  // minifying.
+  bool downsample_box;
 };
 
 struct fx_render_rect_options {
@@ -279,6 +300,11 @@ bool fx_render_pass_add_optimized_blur(
  * light or the other way round.
  */
 bool fx_render_pass_optimized_blur_stale(const struct fx_gles_render_pass* pass);
+/**
+ * Whether `output` (or `pass->fx_offscreen_buffers`) holds an optimized blur
+ * cache usable by the current pass without falling back to live blur.
+ */
+bool fx_render_pass_has_usable_optimized_blur(const struct fx_gles_render_pass* pass, struct wlr_output* output);
 
 /**
  * Render from one buffer to another. False when the source cannot be sampled.

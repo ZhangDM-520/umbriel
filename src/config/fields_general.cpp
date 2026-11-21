@@ -118,6 +118,14 @@ namespace umbriel {
           integer("button_glyph_size", -1, 128, &A::TitleBar::buttonGlyphSize),
           real("button_glyph_stroke", -1.0, 16.0, &A::TitleBar::buttonGlyphStroke),
           boolean("button_background", &A::TitleBar::buttonBackground),
+          registry::choice("color_source", &A::TitleBar::colorSource, titleBarColorSources()),
+          // One flat color row up to four rows of the window's own detail; the bar stretches them over its height.
+          integer(
+              "color_source_height", kTitleBarStripHeightMin, kTitleBarStripHeightMax, &A::TitleBar::colorSourceHeight
+          ),
+          boolean("title_shadow", &A::TitleBar::titleShadow),
+          boolean("title_contrast", &A::TitleBar::titleContrast),
+          boolean("title_contrast_sample", &A::TitleBar::titleContrastSample),
           registry::text("font", &A::TitleBar::font),
           registry::choice("title_align", &A::TitleBar::titleAlign, titleAligns()),
           registry::choice(
@@ -138,10 +146,15 @@ namespace umbriel {
           ),
       };
       static const registry::Fields<A::Blur> blur{
-          boolean("enabled", &A::Blur::enabled),          boolean("optimized", &A::Blur::optimized),
-          integer("passes", 0, 8, &A::Blur::passes),      integer("radius", 0, 100, &A::Blur::radius),
-          real("noise", 0.0, 1.0, &A::Blur::noise),       real("brightness", 0.0, 2.0, &A::Blur::brightness),
-          real("contrast", 0.0, 2.0, &A::Blur::contrast), real("saturation", 0.0, 2.0, &A::Blur::saturation),
+          boolean("enabled", &A::Blur::enabled),
+          boolean("client_requests", &A::Blur::clientRequests),
+          boolean("optimized", &A::Blur::optimized),
+          integer("passes", 0, 8, &A::Blur::passes),
+          integer("radius", 0, 100, &A::Blur::radius),
+          real("noise", 0.0, 1.0, &A::Blur::noise),
+          real("brightness", 0.0, 2.0, &A::Blur::brightness),
+          real("contrast", 0.0, 2.0, &A::Blur::contrast),
+          real("saturation", 0.0, 2.0, &A::Blur::saturation),
       };
       static const registry::Fields<A::Shadow> shadow{
           boolean("enabled", &A::Shadow::enabled),
@@ -190,6 +203,14 @@ namespace umbriel {
           integer("outer_border_width", 0, 100, &A::outerBorderWidth),
           integer("corner_radius", 0, 100, &A::cornerRadius),
           real("drag_opacity", 0.0, 1.0, &A::dragOpacity),
+          registry::choice(
+              "downsample", &A::downsample,
+              {
+                  {"box", DownsampleMode::Box},
+                  {"bilinear", DownsampleMode::Bilinear},
+                  {"nearest", DownsampleMode::Nearest},
+              }
+          ),
           boolean("prefer_no_csd", &A::preferNoCsd),
           boolean("opaque_fullscreen", &A::opaqueFullscreen),
           registry::table("blur", &A::blur, blur),
@@ -344,6 +365,7 @@ namespace umbriel {
           ),
           boolean("xwayland", &G::xwayland),
           boolean("xwayland_native_resolution", &G::xwaylandNativeResolution),
+          boolean("force_x11_supersample", &G::forceX11Supersample),
           boolean("xwayland_xsettings", &G::xwaylandXsettings),
           registry::text("xwayland_primary_output", &G::xwaylandPrimaryOutput),
           boolean("nvidia_sync_workaround", &G::nvidiaSyncWorkaround),

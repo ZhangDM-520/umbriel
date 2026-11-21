@@ -16,6 +16,7 @@ unit_tests = [
   ['effects', ['unit/effects.cpp'], []],
   ['effect-selection', ['unit/effect_selection.cpp'], []],
   ['window-opacity-blur', ['unit/window_opacity_blur.cpp'], [umbriel_core_dep]],
+  ['blur-region', ['unit/blur_region.cpp'], [umbriel_core_dep]],
   ['value-parse', ['unit/value_parse.cpp'], []],
   ['keybind-parse', ['unit/keybind_parse.cpp'], []],
   ['lid-state', ['unit/lid_state.cpp'], []],
@@ -76,11 +77,15 @@ unit_tests = [
   ['cheatsheet-rows', ['unit/cheatsheet_rows.cpp'], []],
   ['shortcut-labels', ['unit/shortcut_labels.cpp'], []],
   ['border-ring', ['unit/border_ring.cpp'], []],
+  ['colour-average', ['unit/colour_average.cpp'], []],
   ['ssd-frame-geometry', ['unit/ssd_frame_geometry.cpp'], []],
+  ['adaptive-sampling', ['unit/adaptive_sampling.cpp'], []],
   ['title-bar-icon', ['unit/title_bar_icon.cpp'], [umbriel_core_dep]],
+  ['title-bar-contrast', ['unit/title_bar_contrast.cpp'], []],
   ['floating', ['unit/floating.cpp'], []],
   ['window-region', ['unit/window_region.cpp'], []],
   ['drag-physics', ['unit/drag_physics.cpp'], []],
+  ['resize-lag', ['unit/resize_lag.cpp'], []],
   ['preset-cycle', ['unit/preset_cycle.cpp'], []],
   ['maximize', ['unit/maximize.cpp'], []],
   ['deferred-unfullscreen', ['unit/deferred_unfullscreen.cpp'], []],
@@ -100,6 +105,7 @@ unit_tests = [
   ['drm-policy', ['unit/drm_policy.cpp'], []],
   ['config-watcher', ['unit/config_watcher.cpp'], [umbriel_core_dep]],
   ['action-registry', ['unit/action_registry.cpp'], [umbriel_core_dep]],
+  ['completion', ['unit/completion.cpp'], [umbriel_core_dep]],
   ['ipc-commands', ['unit/ipc_commands.cpp'], [umbriel_core_dep]],
   ['config-resolve', ['unit/config_resolve.cpp'], []],
   # Reads docs/user/actions.md from the source tree: the doc's tables are generated from the same spec strings the CLI
@@ -224,6 +230,8 @@ layer_client = executable(
     layer_shell_client_c,
     xdg_shell_client_h,
     xdg_shell_client_c,
+    fractional_scale_client_h,
+    fractional_scale_client_c,
   ],
   dependencies: [wayland_client_dep],
 )
@@ -333,6 +341,8 @@ fractional_client = executable(
     legacy_decoration_client_c,
     xdg_decoration_client_h,
     xdg_decoration_client_c,
+    content_type_client_h,
+    content_type_client_c,
   ],
   dependencies: [wayland_client_dep],
 )
@@ -401,6 +411,19 @@ color_feedback_client = executable(
     xdg_shell_client_c,
     color_management_client_h,
     color_management_client_c,
+  ],
+  dependencies: [wayland_client_dep],
+)
+
+# Harness helper that asks for backdrop blur through ext_background_effect_v1 and applies regions on demand.
+background_effect_client = executable(
+  'background-effect-client',
+  [
+    'harness/clients/background_effect_client.cpp',
+    xdg_shell_client_h,
+    xdg_shell_client_c,
+    ext_background_effect_client_h,
+    ext_background_effect_client_c,
   ],
   dependencies: [wayland_client_dep],
 )
@@ -565,6 +588,7 @@ harness_client_targets = [
   input_capture_client,
   global_shortcuts_client,
   color_feedback_client,
+  background_effect_client,
   pixel_probe,
   capture_client,
   pointer_client,

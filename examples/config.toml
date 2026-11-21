@@ -28,6 +28,8 @@ files = []
 # xwayland = false
 # Sharp X11 apps and games on scaled outputs; they see physical resolutions.
 # xwayland_native_resolution = true
+# Opt into render_scale for native X11 apps that scale their own interface.
+# force_x11_supersample = true
 # Umbriel announces the X11 interface scale and cursor theme through XSETTINGS.
 # Turn this off to run your own manager, such as xsettingsd.
 # xwayland_xsettings = false
@@ -69,6 +71,7 @@ files = []
 # mode = "2560x1440@144"
 # position = [0, 0]
 # scale = 1.25
+# render_scale = 2.0 # Supersample: clients render at 2.0, compositor samples down to `scale`.
 # vrr = "fullscreen"
 # hdr = "auto"
 # sdr_transfer = "gamma22" # Or "srgb" for piecewise SDR decoding in HDR.
@@ -80,8 +83,18 @@ files = []
 # Blur uses a smaller radius than the built-in default.
 # https://docs.noctalia.dev/umbriel/appearance/
 #
+# [appearance]
+# How content that shrinks is sampled: "box" averages each destination pixel's
+# source footprint, "bilinear" takes one interpolated sample per pixel, and
+# "nearest" the closest texel.
+# downsample = "box"
+
 [appearance.blur]
 radius = 3
+
+# Applications using ext_background_effect_v1 ask for blur on their own surface.
+# Set to false to keep the protocol advertised but ignore the requests.
+# client_requests = true
 
 # Optional title bar with modifier-free dragging and floating frame resizing.
 # [appearance.title_bar]
@@ -101,6 +114,11 @@ radius = 3
 # button_glyph_size = -1 # Symbol side in logical pixels, 1 to 128; -1 spans half the button.
 # button_glyph_stroke = -1 # Symbol stroke in logical pixels, 0.5 to 16; -1 is one twelfth of the button.
 # button_background = true # Show colored backgrounds behind the symbols.
+# color_source = "fixed" # "window" paints the bar with the top of the window's own content; "average" with its mean color.
+# color_source_height = 1 # Rows of that edge it takes, 1 (one flat color) to 4.
+# title_shadow = true # Dark edge under the title and around the symbols, on any bar color.
+# title_contrast = true # Reverse the title, and a symbol on the bar or on its button color, when it would vanish.
+# title_contrast_sample = false # "window" only, needs title_contrast: sample the edge so the title and bare symbols can reverse there.
 
 # Optional button palette. Glyph colors also apply when button backgrounds are off.
 # [colors.title_bar]
@@ -375,6 +393,12 @@ default_pinned = true
 # match.layout = "stacking"
 # title_bar = "on"
 
+# Take the bar's colour from the window's own top edge only where that helps, keeping [appearance.title_bar]
+# color_source = "fixed" for everything else: a program with an ugly header bar, or a Wine application.
+# [[window_rule]]
+# match.app_id = "^my-wine-app$"
+# title_bar_color_source = "window"
+
 # Keep compositor shortcuts available while a virtual machine window is focused.
 # [[window_rule]]
 # match.app_id = "^virt-manager$"
@@ -450,6 +474,12 @@ blur_popups = true
 match.namespace = "^noctalia-(notification|dock|panel|attached-panel|osd)$"
 blur_optimized = false
 
+# A screenshot overlay shows a frozen capture at its own resolution, so
+# supersampling it would scale that capture up and back down:
+# [[layer_rule]]
+# match.namespace = "^my-screenshot-overlay$"
+# supersample = false
+
 # ==============================================================================
 # Overview
 # Built-in overview and animation values are used. The top-left hot corner opens
@@ -468,12 +498,22 @@ action = "overview-open"
 # curve = "spring:1,900"
 # duration_ms = 250 # For non-spring curves; a spring sets its own length.
 
+# A minimizing floating window fades out and, with `popin`, shrinks toward its
+# anchor; the restore plays the same timeline back. `fade` keeps the geometry.
+# [animation.windows_minimize]
+# enabled = true
+# curve = "spring:1,1200"
+# style = "popin"           # Or "fade"
+# scale = 0.5
+# anchor = "center"         # Or "left", "right", "top_center", "bottom_center"
+
 # Without a size animation, a resized window shows its stretched old frame until
 # it redraws. Wait for the redraws instead (at most 150 ms), then switch to the
 # new layout in one frame.
 # [animation.windows_resize]
 # enabled = false
 # wait_for_redraw = true
+# physics = false
 
 # Optional live workspace reveal (see docs/user/animation.md).
 # Add the bundled effects/animation/workspace_wipe/effect.toml to your includes.

@@ -5,6 +5,7 @@ A scratchpad stores windows outside normal workspaces so they can be shown or hi
 - Moving a window to a scratchpad stores it.
 - Toggling a scratchpad shows or hides its stored windows.
 - An empty scratchpad can be opened and receive newly launched windows.
+- A scratchpad whose last window leaves stays open, showing its backdrop, until `scratchpad-toggle` hides it or `hide_when_empty` is set.
 - Restoring a window returns it to its saved output and workspace.
 
 ## Default scratchpad
@@ -42,7 +43,7 @@ You can also press `Mod+Space` before opening any windows, then use your normal 
 - Pressing again hides that window and shows the next or previous one, wrapping at the ends.
 - When `scratchpad-toggle` is showing every window, either action keeps only the window after or before the focused one.
 - `scratchpad-toggle` hides the scratchpad whichever way it was shown.
-- A window moved into the scratchpad while it shows one window becomes the one on show, as does one a `default_focused` rule brings in. Closing or restoring the window on show hides the scratchpad.
+- A window moved into the scratchpad while it shows one window becomes the one on show, as does one a `default_focused` rule brings in. Closing or restoring the window on show hides the scratchpad while other members remain.
 
 Both styles work on the same scratchpad, so each binding can pick the one it wants.
 
@@ -76,9 +77,19 @@ Opening a scratchpad makes it the launch destination on that output, even when i
 
 The destination is recorded at launch. Hiding the pad before the application maps leaves its new window hidden in that pad. Replacing it with another pad does not redirect the pending launch or give its arriving window focus. Focusing a workspace window or clicking the exposed workspace background makes subsequent launches use the workspace again, while the scratchpad stays visible.
 
-Closing the last member leaves the empty pad open. Toggle it to dismiss it, or set [`hide_when_empty`](#hiding-an-emptied-scratchpad) to hide it automatically. Restoring the last member to its workspace hides the pad. A pad showing one window at a time also hides when that selected window closes.
+Closing the last member leaves the empty pad open, backdrop and all, and still the launch destination: its backdrop has no window to focus, so nothing else took the seat. An empty pad's backdrop dims and blurs the output without taking pointer input, so a window left under it stays clickable and draggable. Restoring or moving the last member to a workspace also leaves the pad showing, but focus goes to the returning window, which ends the pad's launch destination on that output until you open it again. `scratchpad-toggle` hides an empty pad, and `hide_when_empty` hides one whose last window leaves. A pad showing one window at a time still hides when that selected window closes or is restored.
 
 Explicit output, workspace, scratchpad, or enabled pinning rules take priority over the captured scratchpad destination. Unrelated windows without a launch token keep their normal placement. Activating an existing application window does not move it into the scratchpad.
+
+### Dropping a window on an open pad
+
+Drag a window over an open scratchpad on any output and release it there: the window joins that pad, at the point you dropped it. Restoring it later returns it to the workspace the drag started from.
+
+Two drags are declined and stay on their workspace: a lifted tab group, and a pinned window. A declined drop never animates above the pad.
+
+While you are dragging a window it belongs to the drag, not to a pad, so the scratchpad window actions do not apply to it: `window-move-to-scratchpad`, `window-restore-from-scratchpad`, `window-toggle-scratchpad` and a move to a workspace report an error and change nothing until you release. Opening or closing the pad itself still works, and the drop decides what happens: a window released over the visible pad joins it, and a member released while its pad is hidden leaves the pad and lands on the workspace where you dropped it. Closing a pad under a drag does not take its member off screen, and opening one does not pull the dragged window out of the pointer's hands.
+
+Moving a window into a scratchpad with `window-move-to-scratchpad` uses the pad's output. A pad that is still showing keeps that output even when it is empty, so the window joins it there instead of following the pointer; a hidden pad appears on the pointer's output the next time it is shown.
 
 ### Window rules
 
@@ -117,7 +128,7 @@ The implicit `default` scratchpad has no definition and therefore no `spawn_when
 
 ### Hiding an emptied scratchpad
 
-Set `hide_when_empty` on a named scratchpad to hide it when its last window closes or hides itself, so the next toggle shows it and runs `spawn_when_empty` in one press:
+Set `hide_when_empty` on a named scratchpad to hide it whenever its last window leaves, so the next toggle shows it and runs `spawn_when_empty` in one press:
 
 ```toml
 [[scratchpad]]
@@ -126,7 +137,7 @@ spawn_when_empty = "foot"
 hide_when_empty = true
 ```
 
-Only losing the last window hides the pad. An empty pad you open explicitly stays open while its application starts, and closing one of several windows leaves the pad open. A hidden pad stays hidden. If the closing window had keyboard focus, focus returns to the workspace. A window that later joins the pad, such as one from a pending launch, arrives hidden. The setting does not need `spawn_when_empty`.
+An opted-in pad hides whenever it loses its last window, whether that window closed, unmapped, exited, or was restored or moved to a workspace. An empty pad you open explicitly stays open while its application starts, and closing one of several windows leaves the pad open. A hidden pad stays hidden. When the last window closes while it held keyboard focus, focus returns to the workspace. A window that later joins the pad, such as one from a pending launch, arrives hidden. The setting does not need `spawn_when_empty`.
 
 ## Actions
 
@@ -166,11 +177,13 @@ Fullscreen and maximized windows continue to fit their monitor, and their saved 
 
 ## Visibility and focus
 
-Showing a populated scratchpad focuses its most recently focused member. Hiding it returns focus to a workspace window. Opening the workspace overview hides every visible scratchpad without removing its stored windows. While the overview is open, including its closing animation, scratchpad actions and window rules do not show a scratchpad.
+Showing a populated scratchpad focuses its most recently focused member. Hiding it returns focus to a workspace window. Opening the workspace overview fades every visible scratchpad out inside the workspace preview it covered, over the opening animation, and then hides it without removing its stored windows. A gesture that never opens the overview leaves the pad as it was. While the overview is open, including its closing animation, scratchpad actions and window rules do not show a scratchpad.
 
 A dialog parented to a visible scratchpad window joins that scratchpad unless a window rule explicitly chooses another destination.
 
-Backdrop dim and blur affect only the output showing the scratchpad.
+Backdrop dim and blur affect only the output showing the scratchpad. A member that closes while its scratchpad is shown fades like any other window, over the backdrop rather than under it, and a scratchpad hidden mid-close takes the closing window with it.
+
+Showing a scratchpad never moves a floating window it holds: the window stays where it was left, including hanging off an output edge as far as a floating window may. A window moves only with the output it belongs to. A pad that moves to another output carries its members' positions proportionally and pulls an overhanging one back inside the destination, a window joining a pad that already shows on another output joins that output, an output whose usable area changes refits its members, and a maximized member is refitted to the output each time the pad is shown.
 
 ## Restoring windows
 
@@ -180,7 +193,7 @@ Fullscreen, pinned, and maximize-to-edges state are cleared when a window enters
 
 ## Moving scratchpad windows
 
-Workspace move bindings remove the focused window from its scratchpad and send it to the selected workspace, restoring its saved tiled or floating state. Use `window-move-to-workspace <workspace> [--output <output>]` to follow the window, or `window-move-to-workspace-silent <workspace> [--output <output>]` to keep the current workspace active. The next and previous variants work too, using the active workspace on the scratchpad's output as their starting point. Other members stay in the scratchpad. Moving its last member out hides the scratchpad.
+Workspace move bindings remove the focused window from its scratchpad and send it to the selected workspace, restoring its saved tiled or floating state. The window fades in there over [`animation.scratchpad`](animation.md#animation); a silent move to a workspace that is not active fills it in at full opacity, since it is not on screen. Use `window-move-to-workspace <workspace> [--output <output>]` to follow the window, or `window-move-to-workspace-silent <workspace> [--output <output>]` to keep the current workspace active. The next and previous variants work too, using the active workspace on the scratchpad's output as their starting point. Other members stay in the scratchpad. Moving its last member out leaves the pad open on its backdrop, like any other way of emptying it.
 
 Dragging a scratchpad window does not restore it. Dragging one member to another output moves the whole scratchpad there while preserving the other members' relative positions.
 

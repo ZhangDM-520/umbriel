@@ -1,7 +1,9 @@
 #include "render/fx_renderer/effect.h"
 #include "render_fixture.h"
 
+#include <stdarg.h>
 #include <wlr/interfaces/wlr_buffer.h>
+#include <wlr/util/log.h>
 
 static bool submit_solid_frame(struct wlr_render_pass* pass, int width, int height, float red) {
   wlr_render_pass_add_rect(
@@ -1144,6 +1146,197 @@ static bool test_implicit_srgb_target(struct fixture* fixture) {
   return ok;
 }
 
+// `texel_width` x `texel_height` texels drawn into `pixel_width` x
+// `pixel_height` pixels with the box.
+static bool render_box_grid(
+    struct fixture* fixture, const uint8_t (*texels)[4], int texel_width, int texel_height, int pixel_width,
+    int pixel_height, enum wlr_color_transfer_function input_tf, struct wlr_color_transform* output_transform,
+    uint8_t (*out)[4]
+) {
+  struct wlr_color_primaries srgb;
+  wlr_color_primaries_from_named(&srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
+  struct wlr_texture* texture = wlr_texture_from_pixels(
+      fixture->renderer, DRM_FORMAT_ABGR8888, texel_width * 4, texel_width, texel_height, texels
+  );
+  if (!check(texture != NULL, "create box input texture")) {
+    return false;
+  }
+  struct wlr_buffer* output = create_output_buffer(fixture, DRM_FORMAT_ABGR8888, pixel_width, pixel_height);
+  bool ok = check(output != NULL, "allocate box output buffer");
+  struct wlr_render_pass* pass = NULL;
+  pixman_region32_t region;
+  pixman_region32_init_rect(&region, 0, 0, pixel_width, pixel_height);
+  if (ok) {
+    pass = wlr_renderer_begin_buffer_pass(
+        fixture->renderer, output, &(struct wlr_buffer_pass_options){.color_transform = output_transform}
+    );
+    ok = check(pass != NULL, "begin box render pass");
+  }
+  if (ok) {
+    const struct wlr_box box = {.width = pixel_width, .height = pixel_height};
+    fx_render_pass_add_texture(
+        fx_get_render_pass(pass),
+        &(struct fx_render_texture_options){
+            .base =
+                (struct wlr_render_texture_options){
+                    .texture = texture,
+                    .dst_box = box,
+                    .clip = &region,
+                    .transform = WL_OUTPUT_TRANSFORM_NORMAL,
+                    .filter_mode = WLR_SCALE_FILTER_BILINEAR,
+                    .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+                    .transfer_function = input_tf,
+                    .primaries = &srgb,
+                },
+            .downsample_box = true,
+        }
+    );
+    ok = check(wlr_render_pass_submit(pass), "submit box render pass");
+  }
+  if (ok) {
+    ok = check(read_buffer(fixture, output, DRM_FORMAT_ABGR8888, pixel_width * 4, out), "read box output buffer");
+  }
+  pixman_region32_fini(&region);
+  if (output != NULL) {
+    wlr_buffer_drop(output);
+  }
+  wlr_texture_destroy(texture);
+  return ok;
+}
+
+// One row of `texel_count` texels drawn into `pixel_count` pixels with the box.
+static bool render_box_row(
+    struct fixture* fixture, const uint8_t (*texels)[4], int texel_count, int pixel_count,
+    enum wlr_color_transfer_function input_tf, struct wlr_color_transform* output_transform, uint8_t (*out)[4]
+) {
+  return render_box_grid(fixture, texels, texel_count, 1, pixel_count, 1, input_tf, output_transform, out);
+}
+
+// Two texels into one pixel: ratio 2, so the box averages them exactly.
+static bool render_box_pair(
+    struct fixture* fixture, const uint8_t texels[2][4], enum wlr_color_transfer_function input_tf,
+    struct wlr_color_transform* output_transform, uint8_t out[4]
+) {
+  return render_box_row(fixture, texels, 2, 1, input_tf, output_transform, (uint8_t (*)[4])out);
+}
+
+static bool check_box_grey(const uint8_t pixel[4], int expected, const char* name) {
+  for (size_t channel = 0; channel < 3; channel++) {
+    if (abs((int)pixel[channel] - expected) > 1) {
+      fprintf(stderr, "%s: shows %u, expected %d\n", name, pixel[channel], expected);
+      return false;
+    }
+  }
+  return true;
+}
+
+// The box downsample averages in linear light, so a passthrough draw must decode
+// with the curve of the space it is already in: an SDR swapchain (sRGB) or
+// extended linear behind colour management, where the values are already
+// linear. Each pair of texels is chosen to separate the two SDR curves.
+static bool test_box_downsample_curves(struct fixture* fixture) {
+  // 0 and 16 encode to 9 through the sRGB curve and 12 through gamma 2.2, so
+  // the pair pins which curve an SDR passthrough draw decodes with.
+  static const uint8_t dark_pair[2][4] = {{0, 0, 0, 255}, {16, 16, 16, 255}};
+  // 0 and 200 are linear values here: their average (0.392) encodes to 168,
+  // while decoding them as sRGB first would report 158.
+  static const uint8_t bright_pair[2][4] = {{0, 0, 0, 255}, {200, 200, 200, 255}};
+  uint8_t pixel[4] = {0};
+
+  const int sd = to_u8(linear_to_srgb((srgb_to_linear(0.0f) + srgb_to_linear(16.0f / 255.0f)) / 2.0f));
+  const int gamma22 = to_u8(powf(powf(16.0f / 255.0f, 2.2f) / 2.0f, 1.0f / 2.2f));
+  bool ok = check(abs(sd - gamma22) > 1, "the texel pair separates the SDR curves")
+      && render_box_pair(fixture, dark_pair, WLR_COLOR_TRANSFER_FUNCTION_SRGB, NULL, pixel)
+      && check_box_grey(pixel, sd, "SDR passthrough box average");
+
+  // Extended linear content (a compositor-internal buffer) is already linear, so
+  // the box averages the values unchanged; the pass encodes at submit.
+  struct wlr_color_transform* transform =
+      wlr_color_transform_init_linear_to_inverse_eotf(WLR_COLOR_TRANSFER_FUNCTION_SRGB);
+  const int linear_average = to_u8(linear_to_srgb(200.0f / 255.0f / 2.0f));
+  const int decoded_average = to_u8(linear_to_srgb((srgb_to_linear(0.0f) + srgb_to_linear(200.0f / 255.0f)) / 2.0f));
+  ok = ok
+      && check(transform != NULL, "create extended-linear output transform")
+      && check(abs(linear_average - decoded_average) > 1, "the texel pair separates linear from encoded")
+      && render_box_pair(fixture, bright_pair, WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR, transform, pixel)
+      && check_box_grey(pixel, linear_average, "extended-linear passthrough box average");
+  wlr_color_transform_unref(transform);
+
+  // Content that has to be converted keeps using the full decode/encode path.
+  const int converted = to_u8(linear_to_srgb(powf(16.0f / 255.0f, 2.2f) / 2.0f));
+  ok = ok
+      && render_box_pair(fixture, dark_pair, WLR_COLOR_TRANSFER_FUNCTION_GAMMA22, NULL, pixel)
+      && check_box_grey(pixel, converted, "gamma 2.2 content box average");
+  return ok;
+}
+
+// At 1.5:1 a pixel covers one whole texel and half of the next. The box must
+// weight them 2:1 by area and average in light: a lone white texel on black
+// reports linear 2/3 (213) on the pixel holding it whole and 1/3 (156) where it
+// is split, never an encoded blend or a tap that reaches outside the footprint.
+// The light a dark stem removes must not depend on where the stem starts.
+static bool test_box_downsample_area(struct fixture* fixture) {
+  static const uint8_t black[4] = {0, 0, 0, 255};
+  static const uint8_t white[4] = {255, 255, 255, 255};
+  uint8_t pixels[4][4] = {{0}};
+  bool ok = true;
+
+  const uint8_t (*whole)[4] = (const uint8_t[3][4]){
+      {255, 255, 255, 255},
+      {0, 0, 0, 255},
+      {0, 0, 0, 255},
+  };
+  ok = render_box_row(fixture, whole, 3, 2, WLR_COLOR_TRANSFER_FUNCTION_SRGB, NULL, pixels)
+      && check_box_grey(pixels[0], to_u8(linear_to_srgb(2.0f / 3.0f)), "texel covered whole")
+      && check_box_grey(pixels[1], 0, "footprint without the texel");
+
+  const uint8_t (*split)[4] = (const uint8_t[3][4]){
+      {0, 0, 0, 255},
+      {255, 255, 255, 255},
+      {0, 0, 0, 255},
+  };
+  ok = ok
+      && render_box_row(fixture, split, 3, 2, WLR_COLOR_TRANSFER_FUNCTION_SRGB, NULL, pixels)
+      && check_box_grey(pixels[0], to_u8(linear_to_srgb(1.0f / 3.0f)), "texel split, first half")
+      && check_box_grey(pixels[1], to_u8(linear_to_srgb(1.0f / 3.0f)), "texel split, second half");
+
+  // A two-texel black stem on white, six texels into four pixels, at each
+  // start: the removed light stays 2/1.5 pixels.
+  for (int start = 0; ok && start < 5; start++) {
+    uint8_t row[6][4];
+    for (int texel = 0; texel < 6; texel++) {
+      memcpy(row[texel], texel == start || texel == start + 1 ? black : white, sizeof(row[texel]));
+    }
+    ok = render_box_row(fixture, row, 6, 4, WLR_COLOR_TRANSFER_FUNCTION_SRGB, NULL, pixels);
+    float ink = 0.0f;
+    for (int pixel = 0; ok && pixel < 4; pixel++) {
+      ink += 1.0f - srgb_to_linear(pixels[pixel][0] / 255.0f);
+    }
+    if (ok && fabsf(ink - (2.0f / 1.5f)) > 0.02f) {
+      fprintf(stderr, "stem at texel %d removes %.3f pixels of light, expected %.3f\n", start, ink, 2.0f / 1.5f);
+      ok = false;
+    }
+  }
+  return ok;
+}
+
+// One axis inside 4:1 and one above it: 3x5 texels into 2x1 pixels gives an x
+// ratio of 1.5 and a y ratio of 5. The rows are identical, so y can sample them
+// any way it likes and the x weights must still be exact. A dispatch on the
+// larger ratio alone sends x through the tap grid too and reports the blended
+// encoded pair instead of the 2/3 area result.
+static bool test_box_downsample_axes(struct fixture* fixture) {
+  static const uint8_t texels[5][3][4] = {
+      {{255, 255, 255, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}}, {{255, 255, 255, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}},
+      {{255, 255, 255, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}}, {{255, 255, 255, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}},
+      {{255, 255, 255, 255}, {0, 0, 0, 255}, {0, 0, 0, 255}},
+  };
+  uint8_t pixels[2][4] = {{0}};
+  return render_box_grid(fixture, &texels[0][0], 3, 5, 2, 1, WLR_COLOR_TRANSFER_FUNCTION_SRGB, NULL, pixels)
+      && check_box_grey(pixels[0], to_u8(linear_to_srgb(2.0f / 3.0f)), "exact axis beside a tapped axis")
+      && check_box_grey(pixels[1], 0, "footprint without the texel beside a tapped axis");
+}
+
 static bool test_gamma22_to_srgb(struct fixture* fixture) {
   const uint8_t dark_input[4] = {24, 24, 49, 255};
   const uint8_t dark_expected[4] = {17, 17, 45, 255};
@@ -1983,7 +2176,7 @@ static bool test_sdr10_blur_buffer_format(struct fixture* fixture) {
   if (ok) {
     const float opacity = 1.0f;
     struct blur_data blur_data = {
-        .num_passes = 1,
+        .num_passes = 2,
         .radius = 1.0f,
         .brightness = 1.0f,
         .contrast = 1.0f,
@@ -2028,6 +2221,898 @@ static bool test_sdr10_blur_buffer_format(struct fixture* fixture) {
   pixman_region32_fini(&region);
   ok = check(wlr_render_pass_submit(pass), "submit 10-bit blur pass") && ok;
   wlr_buffer_drop(target);
+  return ok;
+}
+
+static bool compare_odd_blur_modes(
+    struct fixture* fixture, struct wlr_buffer* fused_target, struct wlr_buffer* split_target, int width, int height,
+    struct blur_data* blur_data, bool optimized
+) {
+  bool ok = true;
+  uint32_t pixels[2][width * height];
+  for (int mode = 0; mode < 2 && ok; mode++) {
+    const bool split = mode == 1;
+    fx_renderer_split_blur_composite_for_test(fixture->renderer, split);
+    struct wlr_buffer* target = split ? split_target : fused_target;
+    struct wlr_render_pass* pass = wlr_renderer_begin_buffer_pass(fixture->renderer, target, NULL);
+    ok = check(pass != NULL, optimized ? "begin odd-size optimized blur pass" : "begin odd-size blur pass");
+    if (!ok) {
+      break;
+    }
+    wlr_render_pass_add_rect(
+        pass,
+        &(struct wlr_render_rect_options){
+            .box = {.width = width, .height = height},
+            .color = {.r = 0.1f, .g = 0.2f, .b = 0.3f, .a = 1.0f},
+            .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+        }
+    );
+    wlr_render_pass_add_rect(
+        pass,
+        &(struct wlr_render_rect_options){
+            .box = {.width = 50, .height = 40},
+            .color = {.r = 0.9f, .g = 0.4f, .b = 0.2f, .a = 1.0f},
+            .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+        }
+    );
+    ok = check(fx_render_pass_init_offscreen_buffers(pass, fixture->output), "init odd-size blur buffers");
+    if (ok) {
+      struct fx_gles_render_pass* fx_pass = fx_get_render_pass(pass);
+      struct wlr_box box = {.width = width, .height = height};
+      pixman_region32_t region;
+      pixman_region32_init_rect(&region, 0, 0, width, height);
+      const float opacity = 0.9f;
+      struct fx_render_blur_pass_options blur_options = {
+          .tex_options =
+              {
+                  .base =
+                      {
+                          .dst_box = box,
+                          .clip = &region,
+                          .transform = WL_OUTPUT_TRANSFORM_NORMAL,
+                          .filter_mode = WLR_SCALE_FILTER_BILINEAR,
+                          .blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
+                          .alpha = &opacity,
+                      },
+                  .corners = {.top_left = 12.0f, .top_right = 12.0f, .bottom_left = 12.0f, .bottom_right = 12.0f},
+                  .clip_box = &box,
+              },
+          .blur_data = blur_data,
+          .blur_strength = 1.0f,
+      };
+      if (optimized) {
+        if (!split) {
+          ok = check(fx_render_pass_add_optimized_blur(fx_pass, &blur_options), "render odd-size optimized blur") && ok;
+        }
+        pixman_region32_fini(&region);
+        blur_options.tex_options.base.clip = NULL;
+        blur_options.use_optimized_blur = true;
+        fx_render_pass_add_blur(fx_pass, &blur_options);
+      } else {
+        fx_render_pass_add_blur(fx_pass, &blur_options);
+        pixman_region32_fini(&region);
+
+        struct fx_offscreen_buffers* fbos = fx_pass->fx_offscreen_buffers;
+        const int expect_swap_w = split ? width : (width + 3) / 4;
+        const int expect_swap_h = split ? height : (height + 3) / 4;
+        ok = check(
+                 fbos != NULL
+                     && fbos->output.effects_buffer != NULL
+                     && fbos->output.effects_buffer->buffer->width == (width + 1) / 2
+                     && fbos->output.effects_buffer->buffer->height == (height + 1) / 2,
+                 split ? "split blur keeps effects_buffer at half output dimensions"
+                       : "fused blur sizes effects_buffer to half output dimensions"
+             )
+            && check(
+                 fbos != NULL
+                     && fbos->output.effects_buffer_swapped != NULL
+                     && fbos->output.effects_buffer_swapped->buffer->width == expect_swap_w
+                     && fbos->output.effects_buffer_swapped->buffer->height == expect_swap_h,
+                 split ? "split blur sizes effects_buffer_swapped to output dimensions"
+                       : "fused blur sizes effects_buffer_swapped to quarter output dimensions"
+            )
+            && ok;
+      }
+    }
+    ok = check(wlr_render_pass_submit(pass), "submit odd-size blur pass") && ok;
+    if (ok) {
+      ok = check(read_buffer(fixture, target, DRM_FORMAT_ABGR8888, width * sizeof(uint32_t), pixels[mode]), "readback");
+    }
+  }
+  fx_renderer_split_blur_composite_for_test(fixture->renderer, false);
+
+  int max_diff = 0;
+  for (int i = 0; ok && i < width * height; i++) {
+    for (int ch = 0; ch < 4; ch++) {
+      int a = (pixels[0][i] >> (ch * 8)) & 0xFF;
+      int b = (pixels[1][i] >> (ch * 8)) & 0xFF;
+      int d = abs(a - b);
+      if (d > max_diff) {
+        max_diff = d;
+      }
+    }
+  }
+  if (ok) {
+    ok = check(
+        max_diff <= 1,
+        optimized ? "fused and split odd optimized blur match within 1 LSB"
+                  : "fused and split multi-pass odd blur match within 1 LSB"
+    );
+  }
+  return ok;
+}
+
+static bool test_blur_ping_pong_size(struct fixture* fixture) {
+  enum { width = 101, height = 77 };
+  struct wlr_buffer* fused_target = create_output_buffer(fixture, DRM_FORMAT_ABGR8888, width, height);
+  struct wlr_buffer* split_target = create_output_buffer(fixture, DRM_FORMAT_ABGR8888, width, height);
+  if (!check(fused_target != NULL && split_target != NULL, "allocate odd-size blur targets")) {
+    if (fused_target != NULL) {
+      wlr_buffer_drop(fused_target);
+    }
+    if (split_target != NULL) {
+      wlr_buffer_drop(split_target);
+    }
+    return false;
+  }
+
+  struct blur_data blur_data = {
+      .num_passes = 3,
+      .radius = 4.0f,
+      .brightness = 1.15f,
+      .contrast = 1.1f,
+      .saturation = 0.9f,
+  };
+  bool ok = compare_odd_blur_modes(fixture, fused_target, split_target, width, height, &blur_data, false);
+  if (ok) {
+    ok = compare_odd_blur_modes(fixture, fused_target, split_target, width, height, &blur_data, true);
+  }
+
+  wlr_buffer_drop(fused_target);
+  wlr_buffer_drop(split_target);
+
+  // Single-pass fused blur never upscales through effects_buffer_swapped and must not allocate it.
+  fx_renderer_clear_blur_buffers(fixture->output);
+  struct wlr_buffer* single_target = create_output_buffer(fixture, DRM_FORMAT_ABGR8888, width, height);
+  if (!check(single_target != NULL, "allocate single-pass target")) {
+    return false;
+  }
+  struct wlr_render_pass* single_pass = wlr_renderer_begin_buffer_pass(fixture->renderer, single_target, NULL);
+  ok = check(single_pass != NULL, "begin single-pass fused blur pass") && ok;
+  if (single_pass != NULL) {
+    struct wlr_box box = {.width = width, .height = height};
+    wlr_render_pass_add_rect(
+        single_pass,
+        &(struct wlr_render_rect_options){
+            .box = box,
+            .color = {.r = 0.2f, .g = 0.3f, .b = 0.4f, .a = 1.0f},
+            .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+        }
+    );
+    ok = check(fx_render_pass_init_offscreen_buffers(single_pass, fixture->output), "init single-pass buffers") && ok;
+    if (ok) {
+      struct fx_gles_render_pass* fx_pass = fx_get_render_pass(single_pass);
+      pixman_region32_t region;
+      pixman_region32_init_rect(&region, 0, 0, width, height);
+      struct blur_data single_blur = blur_data;
+      single_blur.num_passes = 1;
+      const float opacity = 0.9f;
+      struct fx_render_blur_pass_options single_opts = {
+          .tex_options =
+              {
+                  .base =
+                      {
+                          .dst_box = box,
+                          .clip = &region,
+                          .transform = WL_OUTPUT_TRANSFORM_NORMAL,
+                          .filter_mode = WLR_SCALE_FILTER_BILINEAR,
+                          .blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
+                          .alpha = &opacity,
+                      },
+                  .clip_box = &box,
+              },
+          .blur_data = &single_blur,
+          .blur_strength = 1.0f,
+      };
+      fx_render_pass_add_blur(fx_pass, &single_opts);
+      pixman_region32_fini(&region);
+      struct fx_offscreen_buffers* fbos = fx_pass->fx_offscreen_buffers;
+      ok = check(
+               fbos != NULL && fbos->output.effects_buffer != NULL && fbos->output.effects_buffer_swapped == NULL,
+               "single-pass fused blur skips effects_buffer_swapped allocation"
+           )
+          && ok;
+    }
+    ok = check(wlr_render_pass_submit(single_pass), "submit single-pass fused blur") && ok;
+  }
+  wlr_buffer_drop(single_target);
+
+  // Partial-box optimized blur must populate blur2 kernel padding outside dst_box
+  // so boundary taps inside dst_box do not sample stale/black outer buffer texels.
+  fx_renderer_clear_blur_buffers(fixture->output);
+  struct wlr_buffer* partial_target = create_output_buffer(fixture, DRM_FORMAT_ABGR8888, width, height);
+  if (!check(partial_target != NULL, "allocate partial optimized blur target")) {
+    return false;
+  }
+  const float black_bg[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  const float bright_bg[4] = {0.8f, 0.8f, 0.8f, 1.0f};
+  for (int stage = 0; stage < 2 && ok; stage++) {
+    struct wlr_render_pass* opt_pass = wlr_renderer_begin_buffer_pass(fixture->renderer, partial_target, NULL);
+    ok = check(opt_pass != NULL, "begin partial optimized blur stage") && ok;
+    if (opt_pass == NULL) {
+      break;
+    }
+    const struct wlr_box full_box = {.width = width, .height = height};
+    wlr_render_pass_add_rect(
+        opt_pass,
+        &(struct wlr_render_rect_options){
+            .box = full_box,
+            .color = stage == 0 ? (struct wlr_render_color){black_bg[0], black_bg[1], black_bg[2], black_bg[3]}
+                                : (struct wlr_render_color){bright_bg[0], bright_bg[1], bright_bg[2], bright_bg[3]},
+            .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+        }
+    );
+    ok =
+        check(fx_render_pass_init_offscreen_buffers(opt_pass, fixture->output), "init partial optimized buffers") && ok;
+    if (ok) {
+      struct fx_gles_render_pass* fx_pass = fx_get_render_pass(opt_pass);
+      const struct wlr_box partial_box = {.x = 20, .y = 20, .width = 60, .height = 60};
+      const struct wlr_box capture_box = stage == 0 ? full_box : partial_box;
+      pixman_region32_t region;
+      pixman_region32_init_rect(&region, capture_box.x, capture_box.y, capture_box.width, capture_box.height);
+      const float opacity = 1.0f;
+      struct fx_render_blur_pass_options opt_blur = {
+          .tex_options =
+              {
+                  .base =
+                      {
+                          .dst_box = capture_box,
+                          .clip = &region,
+                          .transform = WL_OUTPUT_TRANSFORM_NORMAL,
+                          .filter_mode = WLR_SCALE_FILTER_BILINEAR,
+                          .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+                          .alpha = &opacity,
+                      },
+                  .clip_box = &capture_box,
+              },
+          .blur_data = &blur_data,
+          .blur_strength = 1.0f,
+      };
+      ok = check(fx_render_pass_add_optimized_blur(fx_pass, &opt_blur), "capture partial optimized blur") && ok;
+      if (stage == 1) {
+        opt_blur.use_optimized_blur = true;
+        fx_render_pass_add_blur(fx_pass, &opt_blur);
+      }
+      pixman_region32_fini(&region);
+    }
+    ok = check(wlr_render_pass_submit(opt_pass), "submit partial optimized blur stage") && ok;
+  }
+  if (ok) {
+    uint32_t out_pixels[width * height];
+    ok = check(
+        read_buffer(fixture, partial_target, DRM_FORMAT_ABGR8888, width * sizeof(uint32_t), out_pixels), "readback"
+    );
+    if (ok) {
+      const uint32_t edge_px = out_pixels[40 * width + 20];
+      const uint32_t center_px = out_pixels[40 * width + 50];
+      const int edge_r = edge_px & 0xFF;
+      const int center_r = center_px & 0xFF;
+      ok = check(
+               abs(edge_r - center_r) <= 4 && edge_r > 180,
+               "partial-box optimized blur includes kernel padding around dst_box"
+           )
+          && ok;
+    }
+  }
+  wlr_buffer_drop(partial_target);
+  return ok;
+}
+
+static bool blur_scratch_buffers_empty(const struct fx_offscreen_buffers* fbos) {
+  return fbos == NULL
+      || (fbos->output.effects_buffer == NULL
+          && fbos->output.effects_buffer_swapped == NULL
+          && fbos->optimized_blur_buffer == NULL
+          && fbos->optimized_no_blur_buffer == NULL
+          && fbos->blur_saved_pixels_buffer == NULL);
+}
+
+static bool scene_commit_and_sample_opts(
+    struct fixture* fixture, struct wlr_scene_output* scene_output,
+    const struct wlr_scene_output_state_options* options, int sample_x, int sample_y, uint8_t pixel[static 4],
+    const char* label
+) {
+  struct wlr_output_state state;
+  wlr_output_state_init(&state);
+  bool ok = check(wlr_scene_output_build_state(scene_output, &state, options), label)
+      && check(state.buffer != NULL, "scene commit produced output buffer");
+  if (ok) {
+    ok = check(fixture_read_display_pixel(fixture, state.buffer, sample_x, sample_y, pixel), "read scene pixel");
+    ok = check(wlr_output_commit_state(fixture->output, &state), "commit scene state") && ok;
+  }
+  wlr_output_state_finish(&state);
+  return ok;
+}
+
+static bool scene_commit_and_sample(
+    struct fixture* fixture, struct wlr_scene_output* scene_output, int sample_x, int sample_y, uint8_t pixel[static 4],
+    const char* label
+) {
+  return scene_commit_and_sample_opts(fixture, scene_output, NULL, sample_x, sample_y, pixel, label);
+}
+
+static bool scene_commit_partial_dot_steps(
+    struct fixture* fixture, struct wlr_scene_output* scene_output, struct wlr_scene_rect* dot, int base_x, int y,
+    int sample_x, int sample_y, uint8_t pixel[static 4], const char* label
+) {
+  bool ok = true;
+  for (int step = 0; step < 3; ++step) {
+    wlr_scene_node_set_position(&dot->node, base_x + step * 2, y);
+    ok = scene_commit_and_sample(fixture, scene_output, sample_x, sample_y, pixel, label) && ok;
+  }
+  return ok;
+}
+
+static int color_blur_error_logs;
+
+static void count_blur_error_logs(enum wlr_log_importance importance, const char* fmt, va_list args) {
+  (void)fmt;
+  (void)args;
+  if (importance <= WLR_ERROR) {
+    color_blur_error_logs++;
+  }
+}
+
+static bool test_pass_subthreshold_blur_noop(struct fixture* fixture) {
+  struct wlr_buffer* target = create_output_buffer(fixture, DRM_FORMAT_ABGR8888, TEST_WIDTH, TEST_HEIGHT);
+  if (!check(target != NULL, "allocate sub-threshold pass target")) {
+    return false;
+  }
+  color_blur_error_logs = 0;
+  wlr_log_init(WLR_ERROR, count_blur_error_logs);
+  struct wlr_render_pass* pass = wlr_renderer_begin_buffer_pass(fixture->renderer, target, NULL);
+  bool ok = check(pass != NULL, "begin sub-threshold blur pass");
+  if (pass != NULL) {
+    struct wlr_box box = {.width = TEST_WIDTH, .height = TEST_HEIGHT};
+    pixman_region32_t region;
+    pixman_region32_init_rect(&region, 0, 0, TEST_WIDTH, TEST_HEIGHT);
+    wlr_render_pass_add_rect(
+        pass,
+        &(struct wlr_render_rect_options){
+            .box = box,
+            .color = {.r = 0.0f, .g = 1.0f, .b = 0.0f, .a = 1.0f},
+            .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+        }
+    );
+    struct fx_gles_render_pass* fx_pass = fx_get_render_pass(pass);
+    const float opacity = 1.0f;
+    struct blur_data blur_data = {
+        .num_passes = 3,
+        .radius = 6.0f,
+        .brightness = 1.0f,
+        .contrast = 1.0f,
+        .saturation = 1.0f,
+    };
+    struct fx_render_blur_pass_options sub_opts = {
+        .tex_options = {.base = {.dst_box = box, .clip = &region, .alpha = &opacity}, .clip_box = &box},
+        .blur_data = &blur_data,
+        .blur_strength = 0.02f,
+    };
+    fx_render_pass_add_blur(fx_pass, &sub_opts);
+    sub_opts.blur_strength = 0.0f;
+    fx_render_pass_add_blur(fx_pass, &sub_opts);
+    sub_opts.blur_data = NULL;
+    sub_opts.blur_strength = 1.0f;
+    fx_render_pass_add_blur(fx_pass, &sub_opts);
+    ok = check(!fx_pass->animation_failed, "sub-threshold pass leaves animation_failed clear") && ok;
+    ok = check(wlr_render_pass_submit(pass), "submit sub-threshold blur pass") && ok;
+    pixman_region32_fini(&region);
+  }
+  wlr_log_init(WLR_ERROR, NULL);
+  uint8_t pixel[4] = {0};
+  ok = check(color_blur_error_logs == 0, "sub-threshold fx_render_pass_add_blur emits no WLR_ERROR")
+      && check(fixture_read_pixel(fixture, target, 0, 0, pixel), "read sub-threshold target pixel")
+      && check(pixel[1] == 255 && pixel[0] == 0 && pixel[2] == 0, "sub-threshold blur leaves target untouched")
+      && ok;
+  wlr_buffer_drop(target);
+  return ok;
+}
+
+static bool test_blur_scratch_lifecycle(struct fixture* fixture) {
+  struct wlr_output_state enable_state;
+  wlr_output_state_init(&enable_state);
+  wlr_output_state_set_enabled(&enable_state, true);
+  wlr_output_state_set_custom_mode(&enable_state, TEST_WIDTH, TEST_HEIGHT, 60000);
+  bool enabled = wlr_output_commit_state(fixture->output, &enable_state);
+  wlr_output_state_finish(&enable_state);
+  if (!check(enabled, "enable scene output")) {
+    return false;
+  }
+
+  struct wlr_scene* scene = wlr_scene_create();
+  struct wlr_scene_output* scene_output = scene != NULL ? wlr_scene_output_create(scene, fixture->output) : NULL;
+  if (!check(scene != NULL && scene_output != NULL, "create scene and output")) {
+    if (scene != NULL) {
+      wlr_scene_node_destroy(&scene->tree.node);
+    }
+    return false;
+  }
+
+  bool ok = true;
+  const float green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+  const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  struct wlr_scene_rect* left = wlr_scene_rect_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT, green);
+  struct wlr_scene_rect* right = wlr_scene_rect_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT, black);
+  if (right != NULL) {
+    wlr_scene_node_set_position(&right->node, TEST_WIDTH / 2, 0);
+  }
+  struct wlr_scene_optimized_blur* optimized = wlr_scene_optimized_blur_create(&scene->tree, TEST_WIDTH, TEST_HEIGHT);
+  if (!check(left != NULL && right != NULL && optimized != NULL, "create scene backdrop and optimized blur")) {
+    wlr_scene_node_destroy(&scene->tree.node);
+    return false;
+  }
+  wlr_scene_set_blur_data(scene, 3, 6.0f, 0.0f, 1.0f, 1.0f, 1.0f);
+
+  const int seam_x = TEST_WIDTH / 2 + 4;
+  const int seam_y = TEST_HEIGHT / 2;
+  uint8_t pixel[4] = {0};
+
+  // Frame 1: no WLR_SCENE_NODE_BLUR consumer -> zero blur scratch buffers allocated.
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit idle scene") && ok;
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_try_get(fixture->output);
+  ok = check(blur_scratch_buffers_empty(fbos), "idle scene with no blur consumer allocates no blur scratch buffers")
+      && check(optimized->dirty, "idle scene keeps optimized blur dirty until consumed")
+      && ok;
+
+  // Frame 1b: capture_exclusion without visible blur consumers must not leak pass->has_blur
+  // or allocate blur scratch buffers for either capture or display.
+  {
+    const struct wlr_scene_output_state_options excl_opts = {.capture_exclusion = true};
+    ok = scene_commit_and_sample_opts(
+             fixture, scene_output, &excl_opts, seam_x, seam_y, pixel, "commit idle scene with capture exclusion"
+         )
+        && ok;
+    fbos = fx_offscreen_buffers_try_get(fixture->output);
+    ok =
+        check(blur_scratch_buffers_empty(fbos), "idle capture-exclusion frame allocates no blur scratch buffers") && ok;
+  }
+
+  // Frame 1c: sub-threshold blur consumer whose strength rounds num_passes to 0 ->
+  // treated as inactive, allocating no blur scratch buffers and logging no error
+  // at either scene or pass level.
+  ok = test_pass_subthreshold_blur_noop(fixture) && ok;
+  struct wlr_scene_blur* blur = wlr_scene_blur_create(&scene->tree, TEST_WIDTH, TEST_HEIGHT);
+  if (!check(blur != NULL, "create blur consumer")) {
+    wlr_scene_node_destroy(&scene->tree.node);
+    return false;
+  }
+  wlr_scene_blur_set_should_only_blur_bottom_layer(blur, true);
+  wlr_scene_blur_set_strength(blur, 0.02f);
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit sub-threshold blur") && ok;
+  fbos = fx_offscreen_buffers_try_get(fixture->output);
+  ok = check(blur_scratch_buffers_empty(fbos), "sub-threshold blur strength allocates no blur scratch buffers")
+      && check(optimized->dirty, "sub-threshold blur keeps optimized blur dirty")
+      && check(pixel[1] == 0, "sub-threshold blur leaves seam unblurred")
+      && ok;
+
+  // Frame 2: full-strength optimized blur consumer -> half-res optimized_blur_buffer,
+  // NULL optimized_no_blur_buffer, NULL blur_saved_pixels_buffer.
+  const float red[4] = {1.0f, 0.0f, 0.0f, 1.0f};
+  wlr_scene_blur_set_strength(blur, 1.0f);
+  uint8_t full_blur_pixel[4] = {0};
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, full_blur_pixel, "commit full-strength blur")
+      && ok;
+  fbos = fx_offscreen_buffers_try_get(fixture->output);
+  ok = check(
+           fbos != NULL
+               && fbos->optimized_blur_buffer != NULL
+               && fbos->optimized_blur_buffer->buffer->width == (TEST_WIDTH + 1) / 2
+               && fbos->optimized_blur_buffer->buffer->height == (TEST_HEIGHT + 1) / 2,
+           "optimized_blur_buffer is sized to half output dimensions"
+       )
+      && check(
+           fbos != NULL && fbos->optimized_no_blur_buffer == NULL, "full strength leaves optimized_no_blur_buffer NULL"
+      )
+      && check(!optimized->dirty, "consumed optimized blur settles")
+      && check(full_blur_pixel[1] > 10, "optimized blur spreads green across center seam")
+      && check(
+           fbos != NULL && fbos->blur_saved_pixels_buffer == NULL,
+           "full-strength optimized blur leaves blur_saved_pixels_buffer NULL"
+      )
+      && ok;
+
+  // Frame 2b: undamaged live-blur commit retains optimized_blur_buffer without spurious thrash or pending frame.
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit undamaged live-blur frame") && ok;
+  ok = check(
+           fbos != NULL && fbos->optimized_blur_buffer != NULL && fbos->optimized_no_blur_buffer == NULL,
+           "undamaged live blur retains optimized_blur_buffer"
+       )
+      && check(!optimized->dirty, "undamaged live blur stays settled")
+      && check(!wlr_scene_output_needs_frame(scene_output), "undamaged live blur schedules no extra frame")
+      && check(pixel[1] == full_blur_pixel[1], "undamaged live blur preserves rendered output")
+      && ok;
+
+  // Frame 2c: full-output opaque layer occluding settled optimized blur (node culled from render list)
+  // still uses the cached optimized_blur_buffer on partial damage without allocating blur_saved_pixels_buffer.
+  struct wlr_scene_rect* full_occ = wlr_scene_rect_create(&scene->tree, TEST_WIDTH, TEST_HEIGHT, red);
+  struct wlr_scene_rect* cursor_dot = wlr_scene_rect_create(&scene->tree, 4, 4, red);
+  if (!check(full_occ != NULL && cursor_dot != NULL, "create full occluder and partial-damage rect")) {
+    wlr_scene_node_destroy(&scene->tree.node);
+    return false;
+  }
+  wlr_scene_node_place_below(&full_occ->node, &blur->node);
+  wlr_scene_node_set_position(&cursor_dot->node, 2, 2);
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit occluded settled optimized blur")
+      && ok;
+  ok = check(pixman_region32_empty(&optimized->node.visible), "full occluder culls settled optimized-blur node")
+      && scene_commit_partial_dot_steps(
+           fixture, scene_output, cursor_dot, 4, 2, seam_x, seam_y, pixel, "commit partial damage over occluded blur"
+      )
+      && check(
+           fbos != NULL && fbos->blur_saved_pixels_buffer == NULL,
+           "partial damage with occluded optimized blur node allocates no saved pixels"
+      )
+      && check(pixel[1] == full_blur_pixel[1], "occluded optimized blur preserves blurred seam")
+      && ok;
+  wlr_scene_node_destroy(&cursor_dot->node);
+  wlr_scene_node_destroy(&full_occ->node);
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit post-occluder settle") && ok;
+
+  // Frame 3: opaque occluder over the green half above settled optimized blur, then partial blur_strength ->
+  // must un-cull the green backdrop beneath optimized blur, capture optimized_no_blur_buffer, and blur across seam.
+  struct wlr_scene_rect* occluder = wlr_scene_rect_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT, red);
+  if (!check(occluder != NULL, "create half-width opaque occluder")) {
+    wlr_scene_node_destroy(&scene->tree.node);
+    return false;
+  }
+  wlr_scene_node_place_below(&occluder->node, &blur->node);
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit occluded scene") && ok;
+  wlr_scene_blur_set_strength(blur, 0.5f);
+  uint8_t half_blur_pixel[4] = {0};
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, half_blur_pixel, "commit partial-strength blur")
+      && ok;
+  ok = check(
+           fbos != NULL && fbos->optimized_no_blur_buffer != NULL, "partial strength populates optimized_no_blur_buffer"
+       )
+      && check(
+           half_blur_pixel[1] > 5 && half_blur_pixel[1] < full_blur_pixel[1],
+           "partial blur strength reduces green bleed without losing occluded backdrop"
+      )
+      && check(!wlr_scene_output_needs_frame(scene_output), "lazy no-blur rebuild leaves no spurious pending frame")
+      && check(
+           fbos != NULL && fbos->blur_saved_pixels_buffer == NULL,
+           "partial-strength optimized blur allocates no saved pixels"
+      )
+      && ok;
+
+  // Frame 3a: partial damage over partial-strength optimized blur (with optimized node occluded too)
+  // must not allocate blur_saved_pixels_buffer.
+  struct wlr_scene_rect* partial_occ = wlr_scene_rect_create(&scene->tree, TEST_WIDTH, TEST_HEIGHT, red);
+  cursor_dot = wlr_scene_rect_create(&scene->tree, 4, 4, red);
+  if (!check(partial_occ != NULL && cursor_dot != NULL, "create partial-strength occluder and partial-damage rect")) {
+    wlr_scene_node_destroy(&scene->tree.node);
+    return false;
+  }
+  wlr_scene_node_place_below(&partial_occ->node, &blur->node);
+  wlr_scene_node_set_position(&cursor_dot->node, 2, 2);
+  ok = scene_commit_and_sample(
+           fixture, scene_output, seam_x, seam_y, pixel, "commit occluded partial-strength optimized blur"
+       )
+      && check(
+           pixman_region32_empty(&optimized->node.visible),
+           "full occluder culls optimized-blur node during partial strength"
+      )
+      && scene_commit_partial_dot_steps(
+           fixture, scene_output, cursor_dot, 4, 2, seam_x, seam_y, pixel, "commit partial damage over optimized blur"
+      )
+      && check(
+           fbos != NULL && fbos->blur_saved_pixels_buffer == NULL,
+           "partial damage over partial-strength optimized blur allocates no saved pixels"
+      )
+      && check(pixel[1] == half_blur_pixel[1], "partial damage preserves partial blurred seam")
+      && ok;
+  wlr_scene_node_destroy(&cursor_dot->node);
+  wlr_scene_node_destroy(&partial_occ->node);
+
+  // Frame 3b: returning to full strength drops optimized_no_blur_buffer while keeping optimized_blur_buffer.
+  wlr_scene_node_destroy(&occluder->node);
+  wlr_scene_blur_set_strength(blur, 1.0f);
+  ok =
+      scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit returned full-strength blur") && ok;
+  ok = check(
+           fbos != NULL && fbos->optimized_blur_buffer != NULL && fbos->optimized_no_blur_buffer == NULL,
+           "returning to full strength releases optimized_no_blur_buffer and keeps optimized_blur_buffer"
+       )
+      && check(pixel[1] == full_blur_pixel[1], "returned full strength matches original blur")
+      && ok;
+
+  // Frame 3c: capture_exclusion must still un-cull and build/reclaim optimized_no_blur_buffer
+  // on display strength transitions instead of falling back to live blur.
+  {
+    const struct wlr_scene_output_state_options excl_opts = {.capture_exclusion = true};
+    struct wlr_scene_rect* excl_occ = wlr_scene_rect_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT, red);
+    if (!check(excl_occ != NULL, "create capture-exclusion half occluder")) {
+      wlr_scene_node_destroy(&scene->tree.node);
+      return false;
+    }
+    wlr_scene_node_place_below(&excl_occ->node, &blur->node);
+    ok = scene_commit_and_sample_opts(
+             fixture, scene_output, &excl_opts, seam_x, seam_y, pixel, "commit occluded capture-exclusion full blur"
+         )
+        && check(pixman_region32_empty(&left->node.visible), "capture-exclusion occluder culls green left backdrop")
+        && ok;
+    wlr_scene_blur_set_strength(blur, 0.5f);
+    ok = scene_commit_and_sample_opts(
+             fixture, scene_output, &excl_opts, seam_x, seam_y, pixel, "commit capture-exclusion partial blur"
+         )
+        && check(
+             fbos != NULL && fbos->optimized_no_blur_buffer != NULL && fbos->blur_saved_pixels_buffer == NULL,
+             "capture-exclusion partial blur builds optimized_no_blur_buffer without saved pixels"
+        )
+        && check(
+             pixel[1] == half_blur_pixel[1],
+             "capture-exclusion partial blur un-culls backdrop instead of blurring occluder"
+        )
+        && ok;
+    wlr_scene_blur_set_strength(blur, 1.0f);
+    ok = scene_commit_and_sample_opts(
+             fixture, scene_output, &excl_opts, seam_x, seam_y, pixel, "commit capture-exclusion returned full blur"
+         )
+        && check(
+             fbos != NULL && fbos->optimized_no_blur_buffer == NULL && fbos->optimized_blur_buffer != NULL,
+             "capture-exclusion return to full strength reclaims optimized_no_blur_buffer"
+        )
+        && check(pixel[1] == full_blur_pixel[1], "capture-exclusion returned full strength matches original blur")
+        && ok;
+    wlr_scene_node_destroy(&excl_occ->node);
+  }
+
+  // Frame 3d: a live blur consumer allocates blur_saved_pixels_buffer on partial damage,
+  // and removing it while an optimized blur remains reclaims blur_saved_pixels_buffer immediately.
+  {
+    struct wlr_scene_blur* live_blur = wlr_scene_blur_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT);
+    struct wlr_scene_rect* live_dot = wlr_scene_rect_create(&scene->tree, 4, 4, red);
+    if (!check(live_blur != NULL && live_dot != NULL, "create live blur consumer and partial-damage dot")) {
+      wlr_scene_node_destroy(&scene->tree.node);
+      return false;
+    }
+    wlr_scene_node_set_position(&live_blur->node, TEST_WIDTH / 2, 0);
+    wlr_scene_node_set_position(&live_dot->node, TEST_WIDTH / 2 + 2, 2);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit initial live blur")
+        && scene_commit_partial_dot_steps(
+             fixture, scene_output, live_dot, TEST_WIDTH / 2 + 4, 2, seam_x, seam_y, pixel,
+             "commit partial damage over live blur"
+        )
+        && check(
+             fbos != NULL && fbos->blur_saved_pixels_buffer != NULL,
+             "live blur allocates blur_saved_pixels_buffer on partial damage"
+        )
+        && ok;
+    wlr_scene_node_destroy(&live_blur->node);
+    wlr_scene_node_destroy(&live_dot->node);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit after removing live blur")
+        && check(
+             fbos != NULL && fbos->blur_saved_pixels_buffer == NULL && fbos->optimized_blur_buffer != NULL,
+             "removing live blur reclaims blur_saved_pixels_buffer while keeping optimized_blur_buffer"
+        )
+        && ok;
+  }
+
+  // Frame 4: destroy blur consumer -> all blur scratch buffers released and optimized cache marked dirty.
+  wlr_scene_node_destroy(&blur->node);
+  blur = NULL;
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit scene after blur removed") && ok;
+  ok = check(blur_scratch_buffers_empty(fbos), "removing all blur consumers releases every blur scratch buffer")
+      && check(optimized->dirty, "evicting optimized blur cache marks node dirty for future consumers")
+      && check(!wlr_scene_output_needs_frame(scene_output), "blur eviction schedules no spurious redraw")
+      && check(pixel[1] == 0, "unblurred seam returns to pure black")
+      && ok;
+
+  // Frame 5: re-create blur consumer over unchanged wallpaper -> regenerates cleanly.
+  blur = wlr_scene_blur_create(&scene->tree, TEST_WIDTH, TEST_HEIGHT);
+  if (!check(blur != NULL, "recreate blur consumer")) {
+    wlr_scene_node_destroy(&scene->tree.node);
+    return false;
+  }
+  wlr_scene_blur_set_should_only_blur_bottom_layer(blur, true);
+  uint8_t reblur_pixel[4] = {0};
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, reblur_pixel, "commit recreated blur") && ok;
+  ok = check(reblur_pixel[1] == full_blur_pixel[1], "recreated blur regenerates identical output") && ok;
+
+  // Frame 5b: evicting blur buffers while an opaque layer covers the green half leaves `left` culled;
+  // re-enabling the optimized consumer un-culls `left` once the cached buffers are absent.
+  {
+    struct wlr_scene_rect* post_occ = wlr_scene_rect_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT, red);
+    if (!check(post_occ != NULL, "create post-settle half occluder")) {
+      wlr_scene_node_destroy(&scene->tree.node);
+      return false;
+    }
+    wlr_scene_node_place_below(&post_occ->node, &blur->node);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit post-settle half occluder")
+        && check(pixman_region32_empty(&left->node.visible), "post-settle half occluder culls green left backdrop")
+        && ok;
+    wlr_scene_blur_set_strength(blur, 0.0f);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "evict blur while half-occluded")
+        && check(blur_scratch_buffers_empty(fbos), "zero strength evicts blur scratch buffers while half-occluded")
+        && check(pixman_region32_empty(&left->node.visible), "eviction leaves culled green left backdrop culled")
+        && ok;
+    wlr_scene_blur_set_strength(blur, 1.0f);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "re-enable blur over culled backdrop")
+        && check(pixel[1] == full_blur_pixel[1], "re-enabled optimized consumer un-culls evicted backdrop")
+        && check(
+             fbos != NULL && fbos->blur_saved_pixels_buffer == NULL,
+             "re-enabled optimized consumer allocates no saved pixels"
+        )
+        && ok;
+    wlr_scene_node_destroy(&post_occ->node);
+  }
+
+  // Frame 5c: dirty partial-region WLR_SCENE_NODE_OPTIMIZED_BLUR on partial damage
+  // expands backdrop damage without allocating blur_saved_pixels_buffer.
+  {
+    struct wlr_scene_rect* dot = wlr_scene_rect_create(&scene->tree, 4, 4, red);
+    if (!check(dot != NULL, "create partial-dirty dot")) {
+      wlr_scene_node_destroy(&scene->tree.node);
+      return false;
+    }
+    wlr_scene_optimized_blur_set_size(optimized, TEST_WIDTH / 2, TEST_HEIGHT);
+    wlr_scene_node_set_position(&dot->node, 2, 2);
+    ok = scene_commit_partial_dot_steps(
+             fixture, scene_output, dot, 4, 2, seam_x, seam_y, pixel, "warm swapchain with half-width optimized"
+         )
+        && check(
+             !pixman_region32_empty(&optimized->node.visible) && !optimized->dirty,
+             "half-width optimized node stays partially visible and settled"
+        )
+        && ok;
+    wlr_scene_optimized_blur_mark_dirty(optimized);
+    struct wlr_output_state dirty_state;
+    wlr_output_state_init(&dirty_state);
+    ok =
+        check(wlr_scene_output_build_state(scene_output, &dirty_state, NULL), "build dirty optimized blur state") && ok;
+    ok = check(
+             pixman_region32_extents(&dirty_state.damage)->x2 > TEST_WIDTH / 2,
+             "dirty partial optimized blur expands backdrop damage past its own region by the sample halo"
+         )
+        && ok;
+    ok = check(wlr_output_commit_state(fixture->output, &dirty_state), "commit dirty optimized blur state") && ok;
+    wlr_output_state_finish(&dirty_state);
+    ok = check(!optimized->dirty, "dirty partial-visible optimized blur renders and clears dirty")
+        && check(
+             fbos != NULL && fbos->blur_saved_pixels_buffer == NULL,
+             "dirty optimized blur allocates no blur_saved_pixels_buffer on partial damage"
+        )
+        && ok;
+    wlr_scene_node_destroy(&dot->node);
+    wlr_scene_optimized_blur_set_size(optimized, TEST_WIDTH, TEST_HEIGHT);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit settle after half-width opt")
+        && ok;
+  }
+
+  // Frame 5d: stale optimized_blur_sdr_tf with occluded settled optimized node, and
+  // out-of-order WLR_SCENE_NODE_OPTIMIZED_BLUR stacked above consumer on stale partial damage,
+  // both fall back to live blur with blur_saved_pixels_buffer compensation.
+  {
+    struct wlr_color_transform* gamma22 =
+        wlr_color_transform_init_linear_to_inverse_eotf(WLR_COLOR_TRANSFER_FUNCTION_GAMMA22);
+    struct wlr_scene_rect* full_occ = wlr_scene_rect_create(&scene->tree, TEST_WIDTH, TEST_HEIGHT, red);
+    struct wlr_scene_rect* dot = wlr_scene_rect_create(&scene->tree, 4, 4, red);
+    if (!check(gamma22 != NULL && full_occ != NULL && dot != NULL, "allocate stale/order cache test nodes")) {
+      wlr_color_transform_unref(gamma22);
+      wlr_scene_node_destroy(&scene->tree.node);
+      return false;
+    }
+    wlr_scene_node_set_enabled(&full_occ->node, false);
+    wlr_scene_node_set_position(&dot->node, 2, 2);
+    wlr_scene_blur_set_strength(blur, 0.5f);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "settle partial blur before full_occ")
+        && ok;
+    wlr_scene_node_set_enabled(&full_occ->node, true);
+    wlr_scene_node_place_above(&full_occ->node, &optimized->node);
+    wlr_scene_node_place_below(&full_occ->node, &blur->node);
+    ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "hide settled optimized before tf")
+        && check(pixman_region32_empty(&optimized->node.visible), "full occluder hides optimized node before tf change")
+        && ok;
+    const struct wlr_scene_output_state_options tf_opts = {.color_transform = gamma22};
+    for (int step = 0; step < 3; ++step) {
+      wlr_scene_node_set_position(&dot->node, 4 + step * 2, 2);
+      ok = scene_commit_and_sample_opts(
+               fixture, scene_output, &tf_opts, seam_x, seam_y, pixel, "commit gamma22 partial damage over stale cache"
+           )
+          && ok;
+    }
+    ok = check(
+             fbos != NULL && fbos->blur_saved_pixels_buffer != NULL,
+             "stale optimized cache falls back to compensated live blur"
+         )
+        && ok;
+
+    // Seed gamma22 cache while visible so blur_saved_pixels_buffer is reclaimed back to NULL,
+    // hide 4x4 optimized beneath a 4x4 occluder across full-damage NULL-transform warm-up
+    // (keeping blur_saved_pixels_buffer == NULL), then uncover and mark 4x4 optimized dirty
+    // above blur for a partial-damage frame that must newly allocate blur_saved_pixels_buffer.
+    wlr_scene_node_destroy(&full_occ->node);
+    wlr_scene_blur_set_strength(blur, 1.0f);
+    wlr_scene_optimized_blur_set_size(optimized, 4, 4);
+    wlr_scene_optimized_blur_mark_dirty(optimized);
+    ok = scene_commit_and_sample_opts(
+             fixture, scene_output, &tf_opts, seam_x, seam_y, pixel, "seed gamma22 stale optimized cache"
+         )
+        && check(
+             fbos != NULL
+                 && fbos->optimized_blur_sdr_tf == WLR_COLOR_TRANSFER_FUNCTION_SRGB
+                 && fbos->blur_saved_pixels_buffer == NULL,
+             "stale sdr_tf seeded and saved pixels reclaimed before out-of-order check"
+        )
+        && ok;
+    struct wlr_scene_rect* order_occ = wlr_scene_rect_create(&scene->tree, 4, 4, red);
+    if (!check(order_occ != NULL, "allocate 4x4 out-of-order occluder")) {
+      wlr_color_transform_unref(gamma22);
+      wlr_scene_node_destroy(&scene->tree.node);
+      return false;
+    }
+    wlr_scene_node_place_above(&order_occ->node, &optimized->node);
+    wlr_scene_node_place_below(&order_occ->node, &blur->node);
+    for (int step = 0; step < 3; ++step) {
+      wlr_scene_output_damage_whole_for_test(scene_output);
+      ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "warm NULL swapchain with full damage")
+          && ok;
+    }
+    wlr_scene_node_destroy(&order_occ->node);
+    wlr_scene_node_raise_to_top(&optimized->node);
+    wlr_scene_optimized_blur_mark_dirty(optimized);
+    ok = check(
+             fbos != NULL
+                 && fbos->blur_saved_pixels_buffer == NULL
+                 && fbos->optimized_blur_sdr_tf == WLR_COLOR_TRANSFER_FUNCTION_SRGB,
+             "pre-condition: blur_saved_pixels_buffer starts NULL before out-of-order partial frame"
+         )
+        && scene_commit_and_sample(
+             fixture, scene_output, seam_x, seam_y, pixel, "partial damage with dirty optimized above blur"
+        )
+        && check(
+             fbos != NULL && fbos->blur_saved_pixels_buffer != NULL,
+             "out-of-order optimized blur newly allocates blur_saved_pixels_buffer before optimized renders"
+        )
+        && ok;
+    wlr_scene_node_destroy(&dot->node);
+    wlr_scene_optimized_blur_set_size(optimized, TEST_WIDTH, TEST_HEIGHT);
+    wlr_scene_node_place_above(&optimized->node, &right->node);
+    wlr_scene_node_place_below(&optimized->node, &blur->node);
+    wlr_color_transform_unref(gamma22);
+    ok =
+        scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "restore clean optimized stacking") && ok;
+  }
+
+  // Frame 6: occlude whole scene -> evicts blur scratch -> uncover right half only while green left half
+  // remains occluded, then uncover left half -> blur must still see un-culled green left backdrop.
+  struct wlr_scene_rect* occ_left = wlr_scene_rect_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT, red);
+  struct wlr_scene_rect* occ_right = wlr_scene_rect_create(&scene->tree, TEST_WIDTH / 2, TEST_HEIGHT, red);
+  if (!check(occ_left != NULL && occ_right != NULL, "create split full-output occluders")) {
+    wlr_scene_node_destroy(&scene->tree.node);
+    return false;
+  }
+  wlr_scene_node_set_position(&occ_right->node, TEST_WIDTH / 2, 0);
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit fully occluded split scene") && ok;
+  ok = check(blur_scratch_buffers_empty(fbos), "full split occlusion evicts blur scratch buffers") && ok;
+  ok =
+      scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "commit second occluded split frame") && ok;
+  wlr_scene_node_destroy(&occ_right->node);
+  ok = scene_commit_and_sample(fixture, scene_output, seam_x, seam_y, pixel, "uncover right half while left occluded")
+      && ok;
+  wlr_scene_node_destroy(&occ_left->node);
+  uint8_t partial_uncover_pixel[4] = {0};
+  ok = scene_commit_and_sample(
+           fixture, scene_output, seam_x, seam_y, partial_uncover_pixel, "uncover remaining left half"
+       )
+      && ok;
+  ok = check(
+           partial_uncover_pixel[1] == full_blur_pixel[1],
+           "partial uncover after blur eviction recaptures occluded backdrop"
+       )
+      && ok;
+
+  wlr_scene_node_destroy(&scene->tree.node);
   return ok;
 }
 
@@ -3556,6 +4641,12 @@ int main(int argc, char* argv[]) {
     ok = test_optimized_blur_size_change(&fixture);
   } else if (strcmp(argv[1], "optimized-blur-copy-failure") == 0) {
     ok = test_optimized_blur_copy_failure(&fixture);
+  } else if (strcmp(argv[1], "box-downsample-curves") == 0) {
+    ok = test_box_downsample_curves(&fixture);
+  } else if (strcmp(argv[1], "box-downsample-area") == 0) {
+    ok = test_box_downsample_area(&fixture);
+  } else if (strcmp(argv[1], "box-downsample-axes") == 0) {
+    ok = test_box_downsample_axes(&fixture);
   } else if (strcmp(argv[1], "gamma22-to-srgb") == 0) {
     ok = test_gamma22_to_srgb(&fixture);
   } else if (strcmp(argv[1], "pq-roundtrip") == 0) {
@@ -3594,6 +4685,10 @@ int main(int argc, char* argv[]) {
     ok = test_capture_read_format(&fixture);
   } else if (strcmp(argv[1], "framebuffer-texture-binding") == 0) {
     ok = test_framebuffer_texture_binding(&fixture);
+  } else if (strcmp(argv[1], "blur-ping-pong-size") == 0) {
+    ok = test_blur_ping_pong_size(&fixture);
+  } else if (strcmp(argv[1], "blur-scratch-lifecycle") == 0) {
+    ok = test_blur_scratch_lifecycle(&fixture);
   } else {
     fprintf(stderr, "unknown case: %s\n", argv[1]);
     ok = false;

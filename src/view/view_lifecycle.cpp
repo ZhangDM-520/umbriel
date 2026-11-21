@@ -14,6 +14,7 @@
 #include "scene/surface_blur.h"
 #include "server/ipc.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -175,6 +176,7 @@ namespace umbriel {
     ViewSurfaceWatch* watch;
     watch = wl_container_of(listener, watch, commit);
     watch->view->syncContentType(watch->surface);
+    watch->view->syncClientBlur(watch->surface);
   }
 
   void View::onViewSurfaceNewSubsurface(wl_listener* listener, void* data) {
@@ -586,6 +588,9 @@ namespace umbriel {
   }
 
   void View::handleUnmap(bool animateClose) {
+    // Read before the links below are released: they are what resolve this window to its pad.
+    Output* scratchpadOutput =
+        m_server->scratchpadManager() != nullptr ? m_server->scratchpadManager()->outputFor(this) : nullptr;
     m_server->seat()->toplevelDrags().unmapped(this);
     if (m_effectSelectionIdle != nullptr) {
       wl_event_source_remove(m_effectSelectionIdle);
@@ -659,7 +664,7 @@ namespace umbriel {
       overview->onViewUnmapped(this, animateClose);
     }
     // Replacement focus can hide the closing tab. Capture while its current visibility still decides eligibility.
-    const CloseSnapshotId snapshot = animateClose ? beginCloseAnimation() : kInvalidCloseSnapshot;
+    const CloseSnapshotId snapshot = animateClose ? beginCloseAnimation(scratchpadOutput) : kInvalidCloseSnapshot;
     // After the close capture, so a minimized window closes unseen. The live node is not re-enabled: a remap shows the
     // window normally.
     if (m_minimized) {
@@ -694,7 +699,16 @@ namespace umbriel {
     wlr_scene_node_clear_animations(&m_contentTree->node);
     m_dragSlotBound = false;
     // The snapshot holds the frozen deformation; the live sheet ends here.
+    resetDragPhysics();
     m_dragPhysics = DragPhysics{};
+    // Land the resting tree so a later remap cannot reappear unclipped under the
+    // drag tree. homeTree() is authoritative: the states above are already stripped.
+    const bool needsRehome = m_pendingHomeParent != nullptr || m_sceneTree->node.parent == m_server->dragTree();
+    m_releaseRehomeArmed = false;
+    m_pendingHomeParent = nullptr;
+    if (needsRehome) {
+      setSceneParent(homeTree());
+    }
     // The window slots leave with the snapshot; a remap binds them again.
     if (m_effects.needsSurface()) {
       wlr_surface* surface = rootSurface();
@@ -858,6 +872,8 @@ namespace umbriel {
     }
     m_contentType = next;
     m_server->scheduleIpcWindowsEvent();
+    // Game and video content skip the supersample.
+    refreshScaleHints();
     if (m_mapped) {
       if (!m_initialContentTypeRulesSettled && next != ContentType::None) {
         m_initialContentTypeRulesSettled = true;
@@ -1095,6 +1111,7 @@ namespace umbriel {
         m_savedScrollingExtent = rule.defaultScrollingExtent;
       }
     }
+    const bool hadResizeRequest = m_floatingSizeConfigure.has_value() || m_tiledSizeRequest.has_value();
     commitFloatingSize();
     (void)settleTiledSizeRequest();
     applyCornerRadius();
@@ -1147,6 +1164,14 @@ namespace umbriel {
       if (m_mapped) {
         m_server->scheduleIpcWindowsEvent();
       }
+    }
+    // An adaptive title bar shows the top of this surface, so a repaint of that edge has to reach it with no reload.
+    if (m_ssdFrame != nullptr) {
+      m_ssdFrame->syncContent(geometryBox());
+    }
+    // The tick a resize waits for: the client has answered a configure with a buffer of a new size.
+    if (m_mapped && (hadResizeRequest || m_floatingSizeConfigure || m_tiledSizeRequest)) {
+      resizeTrace::commit(*this);
     }
     if (Ipc* ipc = m_server->ipc()) {
       ipc->notifyWindowCommitted();

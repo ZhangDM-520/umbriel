@@ -810,6 +810,12 @@ namespace umbriel {
         output->markDirty(Dirty::LayerArrange);
       }
     }
+    if (effects.sceneDownsample) {
+      applyDownsampleMode();
+      for (const auto& output : m_outputs) {
+        output->scheduleFullFrame();
+      }
+    }
     if (effects.input) {
       applyKeyboardConfig();
       for (const auto& pointer : m_pointers) {
@@ -863,6 +869,10 @@ namespace umbriel {
       // Scale may have changed; every surface must hear about it or scale-aware
       // clients keep mapping input with the stale scale.
       refreshSurfaceScales();
+      // Output size, scale, or forced X11 render scale may have changed.
+      if (m_xwayland != nullptr) {
+        m_xwayland->handleOutputLayoutChange();
+      }
     }
     if (effects.tearingPolicy) {
       for (const auto& output : m_outputs) {
@@ -893,6 +903,8 @@ namespace umbriel {
       for (View* view : sortedEffectViews()) {
         view->refreshConfigChrome();
       }
+      // An open menu never commits again, so a blur change would otherwise wait for its next frame.
+      Popup::refreshAllBlur();
       // Screen and cursor presets take their palette from [colors] too.
       m_effects.applyOutputEffects();
       markDirty(Dirty::Backdrop);
@@ -903,6 +915,10 @@ namespace umbriel {
     if (effects.effects && !effects.viewChrome) {
       for (View* view : sortedEffectViews()) {
         view->applyDynamicRules();
+      }
+    } else if (effects.animation && !effects.viewChrome) {
+      for (View* view : sortedEffectViews()) {
+        view->syncAnimationEffects();
       }
     }
     if (effects.animation && m_scratchpadManager != nullptr) {
@@ -1361,7 +1377,9 @@ namespace umbriel {
     }
   }
 
-  void Server::onNewXdgPopup(wl_listener* /*listener*/, void* data) {
+  void Server::onNewXdgPopup(wl_listener* listener, void* data) {
+    Server* self;
+    self = wl_container_of(listener, self, m_newXdgPopup);
     auto* popup = static_cast<wlr_xdg_popup*>(data);
     // Layer-shell popups (and any popup without a parent yet) are handled
     // elsewhere; parent can be null when xdg_shell emits new_popup.
@@ -1369,7 +1387,7 @@ namespace umbriel {
       return;
     }
     View* owner = View::fromSurface(popup->parent);
-    new Popup(popup, nullptr, owner != nullptr ? owner->captureTree() : nullptr);
+    new Popup(popup, nullptr, owner != nullptr ? owner->captureTree() : nullptr, self);
   }
 
   void Server::onNewXdgDecoration(wl_listener* listener, void* data) {
@@ -2601,6 +2619,10 @@ namespace umbriel {
       if (match == nullptr && m_tabletDevices.size() == 1) {
         match = m_tabletDevices.front().get();
       }
+      if (pad->tablet != match && pad->enteredSurface != nullptr) {
+        wlr_tablet_v2_tablet_pad_notify_leave(pad->v2, pad->enteredSurface);
+        pad->enteredSurface = nullptr;
+      }
       pad->tablet = match;
     }
   }
@@ -2771,14 +2793,6 @@ namespace umbriel {
     if (m_insertHint != nullptr && m_insertHint->output() == output) {
       m_insertHint->hideImmediate();
     }
-    // Dropping the snapshot unregisters it and destroys its scene tree.
-    std::erase_if(m_closeSnapshots, [this, output](const std::unique_ptr<CloseSnapshot>& snap) {
-      if (!snap->animatesOn(output)) {
-        return false;
-      }
-      unregisterAnimatable(snap.get());
-      return true;
-    });
     // wlroots 0.20 does not track output lifetime for layer surfaces, so their wlr_output pointer would dangle once the
     // output is freed. Destroy them now while the wlr_output is still valid.
     {
@@ -2791,6 +2805,21 @@ namespace umbriel {
       }
       for (wlr_layer_surface_v1* ls : toClose) {
         wlr_layer_surface_v1_destroy(ls);
+      }
+    }
+    // Dropping the snapshot unregisters it and destroys its scene tree.
+    m_reapedSnapshotsScratch.clear();
+    std::erase_if(m_closeSnapshots, [this, output](const std::unique_ptr<CloseSnapshot>& snap) {
+      if (!snap->animatesOn(output)) {
+        return false;
+      }
+      m_reapedSnapshotsScratch.push_back(snap->id());
+      unregisterAnimatable(snap.get());
+      return true;
+    });
+    if (m_scratchpadManager != nullptr) {
+      for (const CloseSnapshotId id : m_reapedSnapshotsScratch) {
+        m_scratchpadManager->forgetCloseSnapshot(id);
       }
     }
 

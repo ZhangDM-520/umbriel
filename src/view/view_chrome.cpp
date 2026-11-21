@@ -9,6 +9,7 @@
 #include "overview/overview.h"
 #include "scene/effect_registry.h"
 #include "scene/surface_blur.h"
+#include "server/background_effect.h"
 #include "server/server.h"
 #include "view/view.h"
 
@@ -112,7 +113,10 @@ namespace umbriel {
       m_server->scheduleIpcWindowsEvent();
     }
     if ((titleBarHeight() > 0 || !m_tiled) && m_ssdFrame == nullptr) {
-      m_ssdFrame = std::make_unique<SsdFrame>(chromeParent(), TabLabelCache::shared(), m_sceneTree);
+      m_ssdFrame = std::make_unique<SsdFrame>(
+          chromeParent(), TabLabelCache::shared(), m_sceneTree, m_server->colorManager(),
+          wl_display_get_event_loop(m_server->display())
+      );
     }
     if (m_ssdFrame == nullptr) {
       return;
@@ -122,6 +126,7 @@ namespace umbriel {
         && hints.maxWidth == hints.minWidth
         && hints.maxHeight > 0
         && hints.maxHeight == hints.minHeight;
+    m_ssdFrame->setColorSource(m_titleBarColorSource);
     m_ssdFrame->setTitle(title() != nullptr ? title() : "");
     m_ssdFrame->setResizable(!m_tiled);
     m_ssdFrame->setMaximizeEnabled(!fixed);
@@ -132,6 +137,7 @@ namespace umbriel {
     applyBorderColors();
     m_ssdFrame->setBlurOptions(blurOptions());
     m_ssdFrame->setBlurLive(m_server->cursor() != nullptr && m_server->cursor()->isDraggingView(this));
+    m_ssdFrame->setContentSurface(rootSurface(), geometryBox());
     const wlr_box content =
         m_presentedBox.width > 0 && m_presentedBox.height > 0 ? m_presentedBox : committedContentBox();
     layoutChromeAttachment(content.width, content.height);
@@ -273,6 +279,7 @@ namespace umbriel {
       m_workspace->tabs().memberChanged(this);
     }
     m_server->scheduleIpcWindowsEvent();
+    syncAnimationEffects();
   }
 
   View::ClientSize View::chromeContentSize() const {
@@ -360,6 +367,33 @@ namespace umbriel {
     return m_fadeAlpha * m_overviewOpacity * static_cast<float>(std::clamp(m_ruleBlur.current(), 0.0, 1.0));
   }
 
+  float View::surfaceBlurAlpha() const {
+    // A client request is its own opt-in, so the rule's blur fade must not gate it; a window with a rule keeps the
+    // rule's fade. Both paths still follow the lifecycle fade and the overview dim.
+    const bool clientBlur =
+        m_clientBlurRequested && config().appearance.blur.enabled && config().appearance.blur.clientRequests;
+    return clientBlur ? m_fadeAlpha * m_overviewOpacity : blurAlpha();
+  }
+
+  void View::syncClientBlur(wlr_surface* surface) {
+    if (surface == nullptr || surface != rootSurface() || m_server->backgroundEffect() == nullptr) {
+      return;
+    }
+    const pixman_region32_t* committed = m_server->backgroundEffect()->region(surface);
+    const bool requested = committed != nullptr;
+    const bool changed =
+        requested != m_clientBlurRequested || (requested && !pixman_region32_equal(committed, &m_clientBlurRegion));
+    if (!changed) {
+      return;
+    }
+    pixman_region32_clear(&m_clientBlurRegion);
+    if (committed != nullptr) {
+      pixman_region32_copy(&m_clientBlurRegion, committed);
+    }
+    m_clientBlurRequested = requested;
+    updateBlur();
+  }
+
   void View::updateBlur(int contentWidth, int contentHeight) {
     UMBRIEL_ZONE("View::updateBlur");
     if (m_ssdFrame != nullptr) {
@@ -375,9 +409,27 @@ namespace umbriel {
     // Content and its backdrop share a square seam below the title bar.
     const fx_corner_radii corners =
         titleBarHeight() > 0 ? corner_radii_new(0, 0, radius, radius) : corner_radii_all(radius);
+    // A client request (ext_background_effect_v1) opts the surface in and clips the blur to its region.
+    const pixman_region32_t* clientRegion =
+        m_server->backgroundEffect() != nullptr ? m_server->backgroundEffect()->region(rootSurface()) : nullptr;
+    m_clientBlurRequested = clientRegion != nullptr;
+    const wlr_box geometry = geometryBox();
+    // An owned or grabbed presentation stretches the committed geometry over the node; otherwise the buffer is drawn
+    // 1:1 from its own origin, which a fullscreen offset shifts and a tile crop keeps.
+    const bool stretched = layoutPresentationOwned() || sizeGrabActive();
+    const ClientBlurRegion clientBlur{
+        .region = clientRegion,
+        .source = stretched ? geometry
+                            : wlr_box{
+                                  geometry.x - m_presentation.offsetX(),
+                                  geometry.y - m_presentation.offsetY(),
+                                  contentWidth,
+                                  contentHeight,
+                              },
+    };
     m_decoration.updateBlur(
-        m_contentTree, rootSurface(), nodeBox, geometryBox(), corners, nullptr, effectiveOpacity(), blurAlpha(),
-        blurOptions()
+        m_contentTree, rootSurface(), nodeBox, geometry, corners, nullptr, effectiveOpacity(), surfaceBlurAlpha(),
+        blurOptions(), clientBlur
     );
   }
 
@@ -407,6 +459,9 @@ namespace umbriel {
     applyCornerRadius();
     updateBlur();
     updateShadow();
+    // The border effect gate reads decorated(); refresh it even when no
+    // animation is progressing.
+    syncAnimationEffects();
   }
 
   void View::updateBorderGeometry() {

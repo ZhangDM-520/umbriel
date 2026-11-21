@@ -262,6 +262,18 @@ struct fx_renderer {
     struct tex_shader tex_clamp_effects_rgba;
     struct tex_shader tex_clamp_effects_rgbx;
     struct tex_shader tex_clamp_effects_ext;
+    struct tex_shader tex_box_rgba;
+    struct tex_shader tex_box_rgbx;
+    struct tex_shader tex_box_ext;
+    struct tex_shader tex_box_effects_rgba;
+    struct tex_shader tex_box_effects_rgbx;
+    struct tex_shader tex_box_effects_ext;
+    struct tex_shader tex_box_clamp_rgba;
+    struct tex_shader tex_box_clamp_rgbx;
+    struct tex_shader tex_box_clamp_ext;
+    struct tex_shader tex_box_clamp_effects_rgba;
+    struct tex_shader tex_box_clamp_effects_rgbx;
+    struct tex_shader tex_box_clamp_effects_ext;
     struct output_shader output;
 
     struct box_shadow_shader box_shadow;
@@ -286,6 +298,8 @@ struct fx_renderer {
   bool fail_animation_capture_for_test;
   // Set only through fx_renderer_split_blur_composite_for_test.
   bool split_blur_composite_for_test;
+  // Shadow casters reused instead of re-rendered, reported to tests.
+  unsigned shadow_caster_reuses;
   struct fx_effect_shader* animation_shadow_horizontal;
   struct fx_effect_shader* animation_shadow_vertical;
 

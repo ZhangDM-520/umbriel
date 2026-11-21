@@ -105,8 +105,8 @@ namespace umbriel {
       if (overrides.scrolling.defaultExtentFraction) {
         resolved.scrolling.defaultExtentFraction = overrides.scrolling.defaultExtentFraction;
       }
-      if (overrides.scrolling.centerUnderfullStrip) {
-        resolved.scrolling.centerUnderfullStrip = *overrides.scrolling.centerUnderfullStrip;
+      if (overrides.scrolling.underfullStrip) {
+        resolved.scrolling.underfullStrip = *overrides.scrolling.underfullStrip;
       }
       if (overrides.scrolling.centerFocused) {
         resolved.scrolling.centerFocused = *overrides.scrolling.centerFocused;
@@ -368,6 +368,9 @@ namespace umbriel {
       if (rule.allowTearing) {
         resolved.allowTearing = rule.allowTearing;
       }
+      if (rule.supersample) {
+        resolved.supersample = rule.supersample;
+      }
       if (rule.hdr) {
         resolved.hdr = rule.hdr;
       }
@@ -394,6 +397,9 @@ namespace umbriel {
       }
       if (rule.titleBarButtons) {
         resolved.titleBarButtons = rule.titleBarButtons;
+      }
+      if (rule.titleBarColorSource) {
+        resolved.titleBarColorSource = rule.titleBarColorSource;
       }
       if (rule.borderColorFocused) {
         resolved.borderColorFocused = rule.borderColorFocused;
@@ -455,6 +461,9 @@ namespace umbriel {
       if (rule.optimized) {
         resolved.optimized = rule.optimized;
       }
+      if (rule.supersample) {
+        resolved.supersample = rule.supersample;
+      }
     }
     return resolved;
   }
@@ -495,7 +504,7 @@ namespace umbriel {
     resolved.newExitsFullscreen = config.layout.newExitsFullscreen;
     resolved.clientMaximize = config.layout.clientMaximize;
     resolved.scrolling.defaultExtentFraction = config.layout.scrolling.defaultExtentFraction;
-    resolved.scrolling.centerUnderfullStrip = config.layout.scrolling.centerUnderfullStrip;
+    resolved.scrolling.underfullStrip = config.layout.scrolling.underfullStrip;
     resolved.scrolling.centerFocused = config.layout.scrolling.centerFocused;
     resolved.scrolling.centerOnOverviewSelect = config.layout.scrolling.centerOnOverviewSelect;
     resolved.dwindle.preserveSplit = config.layout.dwindle.preserveSplit;

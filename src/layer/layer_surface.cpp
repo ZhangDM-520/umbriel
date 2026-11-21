@@ -11,6 +11,7 @@ extern "C" {
 #include "input/seat.h"
 #include "output/output.h"
 #include "overview/overview.h"
+#include "server/background_effect.h"
 #include "server/server.h"
 #include "view/popup.h"
 #include "wlr.h"
@@ -108,7 +109,7 @@ namespace umbriel {
     m_sceneDestroy.notify = onSceneDestroy;
     wl_signal_add(&m_scene->tree->node.events.destroy, &m_sceneDestroy);
 
-    m_rule = resolveLayerRules(config(), ruleText(m_layerSurface->namespace_), layerOf(layer), m_server->uptimeMs());
+    m_rule = resolveRule(layer);
     m_scene->tree->node.data = sceneNodeData(this);
     m_layerSurface->data = this;
 
@@ -408,23 +409,39 @@ namespace umbriel {
 
   void LayerSurface::updateBlur() {
     const wlr_box box{0, 0, m_layerSurface->surface->current.width, m_layerSurface->surface->current.height};
-    m_blur.update(m_scene->tree, m_layerSurface->surface, box, box, corner_radii_none(), nullptr, blurOptions());
+    const pixman_region32_t* clientRegion = nullptr;
+    if (m_server->backgroundEffect() != nullptr) {
+      clientRegion = m_server->backgroundEffect()->region(m_layerSurface->surface);
+    }
+    // A layer surface is drawn 1:1 at its own origin, so the surface box is what the node shows.
+    m_blur.update(
+        m_scene->tree, m_layerSurface->surface, box, box, corner_radii_none(), nullptr, blurOptions(), 1.0F, nullptr,
+        ClientBlurRegion{.region = clientRegion, .source = box}
+    );
   }
 
   void LayerSurface::applyConfig() {
-    m_rule = resolveLayerRules(
-        config(), ruleText(m_layerSurface->namespace_), layerOf(m_layerSurface->current.layer), m_server->uptimeMs()
-    );
+    resolveRules();
     updateDimBehind();
     updateBlur();
   }
 
   void LayerSurface::refreshStartupRuleEffects() {
-    m_rule = resolveLayerRules(
-        config(), ruleText(m_layerSurface->namespace_), layerOf(m_layerSurface->current.layer), m_server->uptimeMs()
-    );
+    resolveRules();
     if (m_mapped) {
       updateBlur();
+    }
+  }
+
+  ResolvedLayerRule LayerSurface::resolveRule(uint32_t layer) const {
+    return resolveLayerRules(config(), ruleText(m_layerSurface->namespace_), layerOf(layer), m_server->uptimeMs());
+  }
+
+  void LayerSurface::resolveRules() {
+    const bool wasSupersampled = supersampled();
+    m_rule = resolveRule(m_layerSurface->current.layer);
+    if (supersampled() != wasSupersampled) {
+      notifyOutputScale();
     }
   }
 
@@ -459,6 +476,9 @@ namespace umbriel {
   }
 
   void LayerSurface::handleMap() {
+    // A reload only reaches mapped surfaces, so this is where a rule that arrived while the surface was uncommitted
+    // lands, and where a remapped one picks the current rules up again.
+    resolveRules();
     m_mapped = true;
     syncPopupTree();
     m_server->scheduleIpcLayersEvent();
@@ -532,8 +552,15 @@ namespace umbriel {
   }
 
   void LayerSurface::handleCommit() {
+    const uint32_t committed = m_layerSurface->current.committed;
+    const bool initial = m_layerSurface->initial_commit;
+    // Only a layer change can match a different rule: everything else about the rules is settled by applyConfig and by
+    // the map, and a layer surface commits for its own animations.
+    if ((committed & WLR_LAYER_SURFACE_V1_STATE_LAYER) != 0) {
+      resolveRules();
+    }
     updateBlur();
-    if (m_layerSurface->initial_commit) {
+    if (initial) {
       if (Output* out = output()) {
         out->arrangeLayers();
         out->markDirty(Dirty::LayerArrange);
@@ -541,18 +568,12 @@ namespace umbriel {
       return;
     }
 
-    if ((m_layerSurface->current.committed & WLR_LAYER_SURFACE_V1_STATE_LAYER) != 0) {
-      m_rule = resolveLayerRules(
-          config(), ruleText(m_layerSurface->namespace_), layerOf(m_layerSurface->current.layer), m_server->uptimeMs()
-      );
-      updateBlur();
+    if ((committed & WLR_LAYER_SURFACE_V1_STATE_LAYER) != 0) {
       reparentToLayer(m_layerSurface->current.layer);
       notifyDesktopStack();
     }
 
-    if ((m_layerSurface->current.committed
-         & (WLR_LAYER_SURFACE_V1_STATE_KEYBOARD_INTERACTIVITY | WLR_LAYER_SURFACE_V1_STATE_LAYER))
-        != 0) {
+    if ((committed & (WLR_LAYER_SURFACE_V1_STATE_KEYBOARD_INTERACTIVITY | WLR_LAYER_SURFACE_V1_STATE_LAYER)) != 0) {
       if (exclusiveKeyboard()) {
         focus();
       } else if (hasKeyboardFocus() && !acceptsKeyboard()) {
@@ -560,7 +581,7 @@ namespace umbriel {
       }
     }
 
-    if (m_layerSurface->current.committed != 0) {
+    if (committed != 0) {
       if (Output* out = output()) {
         out->markDirty(Dirty::LayerArrange);
       }
@@ -597,7 +618,7 @@ namespace umbriel {
     auto* popup = static_cast<wlr_xdg_popup*>(data);
     // The popup tree shares the surface origin and stacks above its shell layer's regular surfaces.
     wlr_scene_node_raise_to_top(&m_popupTree->node);
-    new Popup(popup, m_popupTree);
+    new Popup(popup, m_popupTree, nullptr, m_server);
   }
 
 } // namespace umbriel

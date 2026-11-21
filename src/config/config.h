@@ -35,7 +35,12 @@ namespace umbriel {
 
   enum class TitleBarMode : uint8_t { On, Negotiated, Forced, Off };
 
+  // How the scene samples a source that shrinks into its destination.
+  enum class DownsampleMode : uint8_t { Box, Bilinear, Nearest };
   enum class TitleBarButtonGlyph : uint8_t { Always, Hover, Never };
+
+  // Where a title bar takes its fill from: the palette, the window's own top edge, or the average of that edge.
+  enum class TitleBarColorSource : uint8_t { Fixed, Window, Average };
 
   enum class ModifierKey {
     Super,
@@ -95,7 +100,7 @@ namespace umbriel {
     std::optional<ClientMaximize> clientMaximize;
     struct Scrolling {
       std::optional<double> defaultExtentFraction;
-      std::optional<bool> centerUnderfullStrip;
+      std::optional<UnderfullStripAlign> underfullStrip;
       std::optional<CenterFocusedColumn> centerFocused;
       std::optional<bool> centerOnOverviewSelect;
       bool operator==(const Scrolling&) const = default;
@@ -138,8 +143,12 @@ namespace umbriel {
     bool operator==(const WorkspaceConfig&) const = default;
   };
 
-  // A user-defined scratchpad. An empty list means that Umbriel provides the
-  // implicit scratchpad named "default" instead.
+  // The scratchpad Umbriel provides when the configuration defines none; a wordless scratchpad action addresses it
+  // too.
+  inline constexpr std::string_view kImplicitScratchpad = "default";
+
+  // A user-defined scratchpad. An empty list means Umbriel provides the implicit scratchpad
+  // `kImplicitScratchpad` instead.
   struct ScratchpadConfig {
     std::string name;
     std::string spawnWhenEmpty;
@@ -158,7 +167,7 @@ namespace umbriel {
     ClientMaximize clientMaximize = ClientMaximize::Column;
     struct Scrolling {
       std::optional<double> defaultExtentFraction;
-      bool centerUnderfullStrip = true;
+      UnderfullStripAlign underfullStrip = UnderfullStripAlign::Center;
       CenterFocusedColumn centerFocused = CenterFocusedColumn::Never;
       bool centerOnOverviewSelect = false;
       // Axis-agnostic layout state is preserved when config reload changes direction.
@@ -336,6 +345,9 @@ namespace umbriel {
     std::optional<OutputMode> mode;
     std::optional<std::array<int, 2>> position;
     std::optional<double> scale;
+    // Scale clients are asked to render at; the compositor samples the larger
+    // buffers down to the `scale` raster. Unset follows the logical scale.
+    std::optional<double> renderScale;
     std::optional<int> transform;
     VrrMode vrr = VrrMode::Disabled;
     bool focusAtStartup = false;
@@ -497,6 +509,10 @@ namespace umbriel {
     // Overrides the client's tearing-control hint. Omitted follows the hint,
     // true forces async preference, and false vetoes it.
     std::optional<bool> allowTearing;
+    // Overrides whether the window renders at its output's render_scale.
+    // Omitted supersamples everything except fullscreen windows and windows
+    // whose content type is game or video; true and false decide outright.
+    std::optional<bool> supersample;
     std::optional<HdrMode> hdr;
     std::optional<double> dimBehind;
     std::optional<double> opacity; // 0.0-1.0
@@ -507,6 +523,8 @@ namespace umbriel {
     std::optional<TitleBarMode> titleBar;
     // Overrides [appearance.title_bar] buttons, read from the title outward.
     std::optional<std::vector<TitleBarButton>> titleBarButtons;
+    // Overrides [appearance.title_bar] color_source for windows this rule matches.
+    std::optional<TitleBarColorSource> titleBarColorSource;
     // Overrides [colors.border] for windows this rule matches.
     std::optional<std::array<float, 4>> borderColorFocused;
     std::optional<std::array<float, 4>> borderColorUnfocused;
@@ -564,6 +582,7 @@ namespace umbriel {
           && allowShortcutsInhibit == other.allowShortcutsInhibit
           && backgroundRender == other.backgroundRender
           && blockCapture == other.blockCapture
+          && supersample == other.supersample
           && vrr == other.vrr
           && allowTearing == other.allowTearing
           && hdr == other.hdr
@@ -575,6 +594,7 @@ namespace umbriel {
           && blurOptimized == other.blurOptimized
           && titleBar == other.titleBar
           && titleBarButtons == other.titleBarButtons
+          && titleBarColorSource == other.titleBarColorSource
           && borderColorFocused == other.borderColorFocused
           && borderColorUnfocused == other.borderColorUnfocused
           && borderColorOuter == other.borderColorOuter
@@ -617,6 +637,7 @@ namespace umbriel {
     std::optional<bool> blockCapture;
     std::optional<VrrMode> vrr;
     std::optional<bool> allowTearing;
+    std::optional<bool> supersample;
     std::optional<HdrMode> hdr;
     std::optional<double> dimBehind;
     std::optional<double> opacity;
@@ -626,6 +647,7 @@ namespace umbriel {
     std::optional<bool> blurOptimized;
     std::optional<TitleBarMode> titleBar;
     std::optional<std::vector<TitleBarButton>> titleBarButtons;
+    std::optional<TitleBarColorSource> titleBarColorSource;
     std::optional<std::array<float, 4>> borderColorFocused;
     std::optional<std::array<float, 4>> borderColorUnfocused;
     std::optional<std::array<float, 4>> borderColorOuter;
@@ -655,6 +677,9 @@ namespace umbriel {
     std::optional<double> dimBehind;
     std::optional<double> ignoreAlpha;
     std::optional<bool> optimized;
+    // Render at the output's render_scale (true) or at its scale (false).
+    // Omitted supersamples every layer surface.
+    std::optional<bool> supersample;
 
     // See WindowRule: the regexes are derived from the patterns.
     bool operator==(const LayerRule& other) const {
@@ -665,7 +690,8 @@ namespace umbriel {
           && blurPopups == other.blurPopups
           && dimBehind == other.dimBehind
           && ignoreAlpha == other.ignoreAlpha
-          && optimized == other.optimized;
+          && optimized == other.optimized
+          && supersample == other.supersample;
     }
   };
 
@@ -675,6 +701,7 @@ namespace umbriel {
     std::optional<double> dimBehind;
     std::optional<double> ignoreAlpha;
     std::optional<bool> optimized;
+    std::optional<bool> supersample;
     bool operator==(const ResolvedLayerRule&) const = default;
   };
 
@@ -780,6 +807,20 @@ namespace umbriel {
         int buttonGlyphSize = -1;
         double buttonGlyphStroke = -1.0;
         bool buttonBackground = true;
+        // "window" paints the bar with the top strip of the window's own content instead of the palette color, and
+        // "average" paints it with that strip's mean color; the palette stays underneath as the fallback.
+        TitleBarColorSource colorSource = TitleBarColorSource::Fixed;
+        // How many logical pixels of the window's top edge that strip takes. The bar stretches them over its whole
+        // height, so a thinner strip reads as one flat color and a thicker one keeps more of the window's own detail.
+        int colorSourceHeight = 1;
+        // Dark edge under the title and the symbols, on any bar color, in every color_source.
+        bool titleShadow = true;
+        // Reverse the title, and a symbol on the bar or on its button color, to black or white when it would sink into
+        // what is behind it.
+        bool titleContrast = true;
+        // "window" mirrors the edge instead of reading it, so it has no color to judge against. This samples the edge
+        // once per change, trading a readback for a title and symbols that can reverse. No effect on the other sources.
+        bool titleContrastSample = false;
         // Read from the title outward: the last one sits at the bar's edge.
         std::vector<TitleBarButton> buttons{TitleBarButton::Minimize, TitleBarButton::Maximize, TitleBarButton::Close};
         TitleBarButtonGeometry buttonGeometry() const {
@@ -796,6 +837,10 @@ namespace umbriel {
       bool opaqueFullscreen = true;
       struct Blur {
         bool enabled = true;
+        // Honour client-requested backdrop blur (ext_background_effect_v1).
+        // Turning this off keeps the global advertised but ignores requests,
+        // like a compositor policy.
+        bool clientRequests = true;
         bool optimized = true;
         int passes = 2;
         int radius = 5;
@@ -844,8 +889,24 @@ namespace umbriel {
       } tabBar;
       bool preferNoCsd = true;
 
+      // Sampling method for sources the scene shrinks into their destination:
+      // the render_scale supersample downsample, scaled-down windows, and
+      // thumbnails. Box averages the source's texel footprint in linear light,
+      // exactly up to 4:1 on each axis and on a tap grid above it; the others
+      // take one sample per pixel.
+      DownsampleMode downsample = DownsampleMode::Box;
+
       int totalBorderWidth() const { return borderWidth + outerBorderWidth; }
       bool operator==(const Appearance&) const = default;
+
+      // Whether a change to the decoration itself separates these two: the
+      // sampling method is a scene policy, refreshed by a frame, and must not
+      // read as a chrome rebuild that dismisses the overview.
+      bool chromeEquals(const Appearance& other) const {
+        Appearance lhs = *this;
+        lhs.downsample = other.downsample;
+        return lhs == other;
+      }
     } appearance;
 
     struct Animation {
@@ -895,6 +956,8 @@ namespace umbriel {
         // While the size does not animate, a reflow that resizes tiles keeps showing their frames, and hides openers,
         // until every resized client has redrawn (or kRedrawWaitMs passes), then lands in one frame.
         bool waitForRedraw = false;
+        // Deform a floating window like an elastic sheet during pointer resizes.
+        bool physics = false;
         bool waitsForClient(bool animationEnabled) const { return waitForRedraw && !(animationEnabled && enabled); }
         bool operator==(const WindowsResize&) const = default;
       } windowsResize;
@@ -927,8 +990,22 @@ namespace umbriel {
         AnimationCurve curve{.easing = Easing::Spring, .spring = {.damping = 1.0, .stiffness = 800.0}};
         double dim = 0.8;
         bool blur = false;
+        // Backdrop blur strength, 0.0-1.0.
+        double blurStrength = 1.0;
         bool operator==(const Scratchpad&) const = default;
       } scratchpad;
+
+      // Hiding and showing a minimized floating window. The live view animates in place, because the window keeps its
+      // surface and box. No effect key: minimize has no effect slot.
+      struct WindowsMinimize {
+        bool enabled = true;
+        int durationMs = 250;
+        AnimationCurve curve{.easing = Easing::Spring, .spring = {.damping = 1.0, .stiffness = 1200.0}};
+        std::string style = "popin";
+        double scale = 0.5;
+        MinimizeAnchor anchor = MinimizeAnchor::Center;
+        bool operator==(const WindowsMinimize&) const = default;
+      } windowsMinimize;
 
       // The shade over a window while a modal dialog is attached to it. `dim` stays without the fade when disabled.
       struct Dialogs {
@@ -1068,7 +1145,7 @@ namespace umbriel {
       ClientMaximize clientMaximize = ClientMaximize::Column;
       struct Scrolling {
         std::optional<double> defaultExtentFraction;
-        bool centerUnderfullStrip = true;
+        UnderfullStripAlign underfullStrip = UnderfullStripAlign::Center;
         CenterFocusedColumn centerFocused = CenterFocusedColumn::Never;
         // Center the column picked in the overview on close, like column-center, whatever centerFocused says.
         bool centerOnOverviewSelect = false;
@@ -1130,6 +1207,8 @@ namespace umbriel {
       // Present outputs to X11 clients at their physical resolution, so they render at native size instead of being
       // upscaled on scaled outputs. Requires restart.
       bool xwaylandNativeResolution = false;
+      // Expose render-scale pixels to native X11 clients instead of physical pixels. Requires restart.
+      bool forceX11Supersample = false;
       // Run an XSETTINGS manager in Xwayland that announces the X screen scale and cursor theme. Requires restart.
       bool xwaylandXsettings = true;
       // Connector or monitor identity to publish as the X11 primary. Empty leaves RandR unmanaged.

@@ -30,6 +30,7 @@ using umbriel::ModRightDoubleClick;
 using umbriel::SdrGamut;
 using umbriel::SdrTransfer;
 using umbriel::TrackLayout;
+using umbriel::UnderfullStripAlign;
 using umbriel::VrrMode;
 using umbriel::WindowDragToggle;
 
@@ -280,7 +281,7 @@ mode = "dwindle"
 extent_presets = [0.05, 0.5, 2.0]
 
 [layout.scrolling]
-center_underfull_strip = false
+underfull_strip = "start"
 always_center_single_column = true
 [layout.dwindle]
 preserve_split = true
@@ -297,7 +298,7 @@ mode = "scrolling"
 extent_presets = [0.25, 0.75]
 
 [workspace.layout.scrolling]
-center_underfull_strip = true
+underfull_strip = "end"
 [workspace.layout.dwindle]
 preserve_split = false
 )");
@@ -313,7 +314,7 @@ preserve_split = false
   CHECK_EQ(store.config().layout.extentPresets[1], 0.5);
   // Above 1.0 loads unclamped (scrolling columns may span several viewports); only the 0.1 floor clamps here.
   CHECK_EQ(store.config().layout.extentPresets[2], 2.0);
-  CHECK(!store.config().layout.scrolling.centerUnderfullStrip);
+  CHECK(store.config().layout.scrolling.underfullStrip == UnderfullStripAlign::Start);
   CHECK(store.config().layout.dwindle.preserveSplit);
   CHECK(store.config().appearance.preferNoCsd);
   CHECK_EQ(store.config().outputs.size(), size_t{1});
@@ -323,7 +324,7 @@ preserve_split = false
   CHECK(store.config().workspaceRules[0].layout.mode == LayoutMode::Scrolling);
   CHECK(store.config().workspaceRules[0].layout.extentPresets.has_value());
   CHECK_EQ(store.config().workspaceRules[0].layout.extentPresets->size(), size_t{2});
-  CHECK(store.config().workspaceRules[0].layout.scrolling.centerUnderfullStrip == true);
+  CHECK(store.config().workspaceRules[0].layout.scrolling.underfullStrip == UnderfullStripAlign::End);
   CHECK(store.config().workspaceRules[0].layout.dwindle.preserveSplit == false);
   CHECK(containsDiagnostic(store, "unknown key unknown_root_key"));
   CHECK(containsDiagnostic(store, "output.DP-1.scale = 9"));
@@ -340,6 +341,25 @@ UMBRIEL_TEST(rejectsRemovedWidthPresetKey) {
   CHECK(store.reload().success);
   CHECK_EQ(store.config().layout.extentPresets.size(), size_t{3});
   CHECK(containsDiagnostic(store, "unknown key layout.width_presets"));
+}
+
+UMBRIEL_TEST(misspelledRuleMatchKeyDropsRule) {
+  const TempConfig file;
+  file.write(R"(
+[[window_rule]]
+match = { app_id = "foot", titel = "x" }
+default_floating = true
+
+[[layer_rule]]
+match = { namespace = "bar", layerr = "top" }
+blur = true
+)");
+
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  CHECK(store.reload().success);
+  CHECK(store.config().windowRules.empty());
+  CHECK(store.config().layerRules.empty());
 }
 
 UMBRIEL_TEST(backgroundDefaultsOpaque) {
@@ -765,7 +785,7 @@ UMBRIEL_TEST(scrollingDefaultExtentIsOptional) {
   ConfigStore& store = umbriel::configStore();
   store.setRootPath(file.path(), true);
 
-  file.write("[layout.scrolling]\ncenter_underfull_strip = false\n");
+  file.write("[layout.scrolling]\nunderfull_strip = \"start\"\n");
   CHECK(store.reload().success);
   CHECK(!store.config().layout.scrolling.defaultExtentFraction.has_value());
 
@@ -779,9 +799,36 @@ UMBRIEL_TEST(scrollingDefaultExtentIsOptional) {
   CHECK(!store.config().layout.scrolling.defaultExtentFraction.has_value());
   CHECK(containsDiagnostic(store, "unknown key layout.scrolling.default_width_fraction"));
 
-  file.write("[layout.scrolling]\ncenter_underfull_strip = true\n");
+  file.write("[layout.scrolling]\nunderfull_strip = \"end\"\n");
   CHECK(store.reload().success);
   CHECK(!store.config().layout.scrolling.defaultExtentFraction.has_value());
+}
+
+// The placement key round-trips every documented value, and an unknown one is reported and leaves the target alone.
+UMBRIEL_TEST(scrollingUnderfullStripParsesEveryPlacement) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  for (const auto& [name, expected] :
+       {std::pair{"start", UnderfullStripAlign::Start}, std::pair{"center", UnderfullStripAlign::Center},
+        std::pair{"end", UnderfullStripAlign::End}}) {
+    file.write(std::format("[layout.scrolling]\nunderfull_strip = \"{}\"\n", name));
+    CHECK(store.reload().success);
+    CHECK(store.config().layout.scrolling.underfullStrip == expected);
+  }
+  CHECK(!containsDiagnostic(store, "underfull_strip"));
+
+  file.write("[layout.scrolling]\nunderfull_strip = \"left\"\n");
+  CHECK(store.reload().success);
+  // An invalid value leaves the default in place and names the accepted set.
+  CHECK(store.config().layout.scrolling.underfullStrip == UnderfullStripAlign::Center);
+  CHECK(containsDiagnostic(store, "underfull_strip \"left\" (expected \"start\", \"center\", or \"end\")"));
+
+  // The boolean this key replaced is not silently ignored: the unknown-key diagnostic is the migration path.
+  file.write("[layout.scrolling]\ncenter_underfull_strip = true\n");
+  CHECK(store.reload().success);
+  CHECK(containsDiagnostic(store, "unknown key layout.scrolling.center_underfull_strip"));
 }
 
 UMBRIEL_TEST(outputScrollingDefaultExtentUsesNarrowLayoutScope) {
@@ -820,6 +867,75 @@ center_focused = true
   CHECK(store.reload().success);
   CHECK(!store.config().outputs[0].layout.mode.has_value());
   CHECK(!store.config().outputs[0].layout.scrolling.defaultExtentFraction.has_value());
+}
+
+UMBRIEL_TEST(outputRenderScaleIsHonoredWarnedAndClamped) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(R"(
+[output.DP-1]
+scale = 1.5
+render_scale = 2.0
+
+[output.HDMI-1]
+scale = 1.5
+render_scale = 1.0
+)");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().outputs.size(), size_t{2});
+  CHECK(store.config().outputs[0].renderScale.has_value());
+  CHECK_EQ(*store.config().outputs[0].renderScale, 2.0);
+  CHECK(store.config().outputs[1].renderScale.has_value());
+  CHECK_EQ(*store.config().outputs[1].renderScale, 1.0);
+  CHECK(containsDiagnostic(store, "output.HDMI-1.render_scale"));
+  CHECK(containsDiagnostic(store, "undersamples"));
+
+  file.write("[output.DP-1]\nscale = 1.5\nrender_scale = 9.0\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(*store.config().outputs[0].renderScale, 4.0);
+  CHECK(containsDiagnostic(store, "output.DP-1.render_scale = 9"));
+
+  // Without `scale`, the warn compares against the documented default: an
+  // undersampling render_scale still warns and is still honored.
+  file.write("[output.DP-1]\nrender_scale = 0.5\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(*store.config().outputs[0].renderScale, 0.5);
+  CHECK(containsDiagnostic(store, "undersamples"));
+
+  file.write("[output.DP-1]\nscale = 1.5\n");
+  CHECK(store.reload().success);
+  CHECK(!store.config().outputs[0].renderScale.has_value());
+  CHECK(!containsDiagnostic(store, "render_scale"));
+}
+
+UMBRIEL_TEST(appearanceDownsampleSelectsTheSamplingMethod) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  // Box is the default: minified sources area-average their texel footprint.
+  file.write("[appearance]\nborder_width = 1\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Box);
+  CHECK(!containsDiagnostic(store, "downsample"));
+
+  file.write("[appearance]\ndownsample = \"bilinear\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Bilinear);
+
+  file.write("[appearance]\ndownsample = \"nearest\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Nearest);
+
+  file.write("[appearance]\ndownsample = \"lanczos\"\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Box);
+
+  file.write("[appearance]\ndownsample = true\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().appearance.downsample == umbriel::DownsampleMode::Box);
 }
 
 UMBRIEL_TEST(outputWorkspaceAxisAcceptsOnlyItsTwoNames) {
@@ -1264,6 +1380,26 @@ action = "window-restore-from-scratchpad missing"
   CHECK(containsDiagnostic(store, "ignoring hot_corners.bottom_left.action (unknown scratchpad 'missing')"));
 }
 
+UMBRIEL_TEST(scratchpadBlurStrengthDefaultsAndClamps) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[animation.scratchpad]\nblur = true\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().animation.scratchpad.blurStrength, 1.0);
+
+  file.write("[animation.scratchpad]\nblur = true\nblur_strength = 2.0\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().animation.scratchpad.blurStrength, 1.0);
+  CHECK(containsDiagnostic(store, "animation.scratchpad.blur_strength = 2 out of range, clamped to 1"));
+
+  file.write("[animation.scratchpad]\nblur = true\nblur_strength = -1.0\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().animation.scratchpad.blurStrength, 0.0);
+  CHECK(containsDiagnostic(store, "animation.scratchpad.blur_strength = -1 out of range, clamped to 0"));
+}
+
 UMBRIEL_TEST(overviewBackgroundBlurLoads) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
@@ -1333,6 +1469,39 @@ UMBRIEL_TEST(overviewWorkspaceCurveLoadsAndFallsBackToItsSpring) {
   CHECK(store.reload().success);
   CHECK(store.config().animation.overview.workspaceCurve.easing == umbriel::Easing::Spring);
   CHECK_EQ(store.config().animation.overview.workspaceCurve.spring.stiffness, 1000.0);
+}
+
+UMBRIEL_TEST(windowsMinimizeParsesEveryStyleAndAnchor) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  // Defaults: a popin shrink toward the window's own centre.
+  file.write("[animation]\n");
+  CHECK(store.reload().success);
+  const auto& defaults = store.config().animation.windowsMinimize;
+  CHECK(defaults.enabled);
+  CHECK(defaults.style == "popin");
+  CHECK(defaults.anchor == umbriel::MinimizeAnchor::Center);
+  CHECK_EQ(defaults.scale, 0.5);
+
+  for (const auto& [name, expected] :
+       {std::pair{"center", umbriel::MinimizeAnchor::Center}, std::pair{"left", umbriel::MinimizeAnchor::Left},
+        std::pair{"right", umbriel::MinimizeAnchor::Right}, std::pair{"top_center", umbriel::MinimizeAnchor::TopCenter},
+        std::pair{"bottom_center", umbriel::MinimizeAnchor::BottomCenter}}) {
+    file.write(std::format("[animation.windows_minimize]\nanchor = \"{}\"\n", name));
+    CHECK(store.reload().success);
+    CHECK(store.config().animation.windowsMinimize.anchor == expected);
+  }
+  file.write("[animation.windows_minimize]\nstyle = \"fade\"\nscale = 0.25\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().animation.windowsMinimize.style == "fade");
+  CHECK_EQ(store.config().animation.windowsMinimize.scale, 0.25);
+  file.write("[animation.windows_minimize]\nstyle = \"zoom\"\n");
+  CHECK(store.reload().success);
+  // An unknown style keeps the default and names the accepted set.
+  CHECK(store.config().animation.windowsMinimize.style == "popin");
+  CHECK(containsDiagnostic(store, "windows_minimize.style \"zoom\" (expected \"popin\" or \"fade\")"));
 }
 
 UMBRIEL_TEST(durationBesideASpringCurveIsReportedAsInert) {
@@ -2402,6 +2571,12 @@ UMBRIEL_TEST(layerMatchersLoadLayerAndStartup) {
   file.write("[[layer_rule]]\nmatch.layer = \"sideways\"\nblur = true\n");
   CHECK(store.reload().success);
   CHECK(store.config().layerRules.empty());
+
+  file.write("[[layer_rule]]\nmatch.namespace = \"^overlay$\"\nsupersample = false\n");
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().layerRules.size(), size_t{1});
+  CHECK(store.config().layerRules[0].supersample == false);
+  CHECK(!containsDiagnostic(store, "unknown key layer_rule.supersample"));
 }
 
 UMBRIEL_TEST(windowStateMatchersLoadBooleans) {
@@ -2710,6 +2885,23 @@ UMBRIEL_TEST(nvidiaSyncWorkaroundReloadsAndDefaultsOn) {
   CHECK(store.config().general.nvidiaSyncWorkaround);
   CHECK(containsDiagnostic(store, "ignoring general.nvidia_sync_workaround (expected boolean)"));
   CHECK(!containsDiagnostic(store, "unknown key general.nvidia_sync_workaround"));
+}
+
+UMBRIEL_TEST(forceX11SupersampleLoadsAndDefaultsOff) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write("[general]\nforce_x11_supersample = true\n");
+  CHECK(store.reload().success);
+  CHECK(store.config().general.forceX11Supersample);
+  file.write("[general]\nforce_x11_supersample = \"true\"\n");
+  CHECK(store.reload().success);
+  CHECK(!store.config().general.forceX11Supersample);
+  CHECK(containsDiagnostic(store, "ignoring general.force_x11_supersample (expected boolean)"));
+  file.write("[general]\n");
+  CHECK(store.reload().success);
+  CHECK(!store.config().general.forceX11Supersample);
 }
 
 UMBRIEL_TEST(xwaylandPrimaryOutputLoadsAndCanBeRemoved) {
@@ -3832,6 +4024,7 @@ curve = "custom"
 [animation.scratchpad]
 dim = 0.4
 blur = true
+blur_strength = 0.35
 )");
 
   ConfigStore& store = umbriel::configStore();
@@ -3860,6 +4053,7 @@ blur = true
   CHECK_EQ(animation.windowsMove.durationMs, 320);
   CHECK_EQ(animation.scratchpad.dim, 0.4);
   CHECK(animation.scratchpad.blur);
+  CHECK_EQ(animation.scratchpad.blurStrength, 0.35);
 
   file.write(R"(
 [appearance.animations]
@@ -5180,6 +5374,11 @@ button_position = "left"
 button_corner_radius = 4
 button_glyph = "never"
 button_background = false
+color_source = "window"
+color_source_height = 3
+title_shadow = false
+title_contrast = false
+title_contrast_sample = true
 [colors.title_bar]
 background = "#FF0000FF"
 background_unfocused = "#00FF00FF"
@@ -5207,6 +5406,11 @@ minimize_glyph_hover = "#00FFFFFF"
   CHECK_EQ(bar.buttonCornerRadius, 4);
   CHECK_EQ(bar.buttonGlyph, umbriel::TitleBarButtonGlyph::Never);
   CHECK_EQ(bar.buttonBackground, false);
+  CHECK_EQ(bar.colorSource, umbriel::TitleBarColorSource::Window);
+  CHECK_EQ(bar.colorSourceHeight, 3);
+  CHECK_EQ(bar.titleShadow, false);
+  CHECK_EQ(bar.titleContrast, false);
+  CHECK_EQ(bar.titleContrastSample, true);
   const auto& colors = store.config().colors.titleBar;
   CHECK_EQ(colors.background[0], 1.0F);
   CHECK_EQ(colors.backgroundUnfocused[1], 1.0F);
@@ -5235,6 +5439,11 @@ button_position = "middle"
 button_corner_radius = 500
 button_glyph = "sometimes"
 button_background = 1
+color_source = "adaptive"
+color_source_height = 9
+title_shadow = 1
+title_contrast = "yes"
+title_contrast_sample = []
 [colors.title_bar]
 close_glyph = true
 close_glyph_hover = 1
@@ -5253,6 +5462,11 @@ minimize_glyph_hover = {}
   CHECK_EQ(store.config().appearance.titleBar.buttonCornerRadius, 100);
   CHECK_EQ(store.config().appearance.titleBar.buttonGlyph, umbriel::TitleBarButtonGlyph::Hover);
   CHECK_EQ(store.config().appearance.titleBar.buttonBackground, true);
+  CHECK_EQ(store.config().appearance.titleBar.colorSource, umbriel::TitleBarColorSource::Fixed);
+  CHECK_EQ(store.config().appearance.titleBar.colorSourceHeight, 4);
+  CHECK_EQ(store.config().appearance.titleBar.titleShadow, true);
+  CHECK_EQ(store.config().appearance.titleBar.titleContrast, true);
+  CHECK_EQ(store.config().appearance.titleBar.titleContrastSample, false);
   CHECK(containsDiagnostic(store, "appearance.title_bar.height = 500 out of range, clamped to 128"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.title_align"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_position"));
@@ -5260,6 +5474,11 @@ minimize_glyph_hover = {}
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_glyph"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.button_background"));
   CHECK(containsDiagnostic(store, "appearance.title_bar.mode"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.color_source"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.color_source_height"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.title_shadow"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.title_contrast"));
+  CHECK(containsDiagnostic(store, "appearance.title_bar.title_contrast_sample"));
   for (const auto* key :
        {"close_glyph", "close_glyph_hover", "maximize_glyph", "maximize_glyph_hover", "minimize_glyph",
         "minimize_glyph_hover"}) {
@@ -5529,6 +5748,38 @@ title_bar_buttons = ["close"]
   CHECK(resolve("bare").titleBarButtons == none);
   CHECK(resolve("dialog").titleBarButtons == closeOnly);
   CHECK(!resolve("other").titleBarButtons.has_value());
+}
+
+UMBRIEL_TEST(titleBarColorSourceRuleOverridesOnlyWhenSet) {
+  using umbriel::TitleBarColorSource;
+  const TempConfig file;
+  file.write(R"(
+[[window_rule]]
+match.app_id = "^video$"
+title_bar_color_source = "window"
+[[window_rule]]
+match.app_id = "^video$"
+title_bar = "forced"
+[[window_rule]]
+match.app_id = "^terminal$"
+title_bar_color_source = "fixed"
+[[window_rule]]
+match.app_id = "^typo$"
+title_bar_color_source = "averaged"
+)");
+  auto& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  CHECK(store.reload().success);
+  CHECK(containsDiagnostic(store, "title_bar_color_source \"averaged\""));
+  const auto resolve = [&](const char* appId) {
+    return umbriel::resolveWindowRules(store.config(), appId, "title", std::nullopt, umbriel::ContentType::None, {}, 0);
+  };
+  // A later rule without the key leaves the earlier override in place, and an omitted key inherits the global source.
+  CHECK(resolve("video").titleBarColorSource == TitleBarColorSource::Window);
+  CHECK(resolve("terminal").titleBarColorSource == TitleBarColorSource::Fixed);
+  CHECK(!resolve("other").titleBarColorSource.has_value());
+  // A value outside the three sources is reported and leaves the rule without one rather than guessing.
+  CHECK(!resolve("typo").titleBarColorSource.has_value());
 }
 
 UMBRIEL_TEST(stackingLayoutLoadsGloballyAndPerWorkspace) {

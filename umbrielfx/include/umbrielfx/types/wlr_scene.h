@@ -123,6 +123,19 @@ enum wlr_scene_direct_scanout_status {
 };
 
 /**
+ * How a scene samples a source that shrinks into its destination (a client
+ * rendering above the output scale, a scaled-down window, a thumbnail).
+ */
+enum wlr_scene_downsample_mode {
+  /** Single-tap linear fetch (default). */
+  WLR_SCENE_DOWNSAMPLE_BILINEAR,
+  /** Area (box) average over the source's whole texel footprint. */
+  WLR_SCENE_DOWNSAMPLE_BOX,
+  /** Single-tap nearest fetch. */
+  WLR_SCENE_DOWNSAMPLE_NEAREST,
+};
+
+/**
  * A sub-tree in the scene-graph.
  *
  * Do not add members here. struct wlr_scene embeds this struct by value, so its
@@ -170,7 +183,39 @@ struct wlr_scene {
     float background_color[4];
     size_t capture_protected_nodes;
     bool capture_policy_failed;
+
+    // May be NULL: the scale clients should render at for a surface presented
+    // on a given output (its render scale, which may depend on the surface).
+    // Derivation falls back to the output's own scale.
+    double (*preferred_scale_provider)(struct wlr_output* output, struct wlr_surface* surface, void* data);
+    void* preferred_scale_provider_data;
+
+    // How minified scene buffers sample their source; see
+    // wlr_scene_set_downsample_mode. Zero is WLR_SCENE_DOWNSAMPLE_BILINEAR.
+    enum wlr_scene_downsample_mode downsample_mode;
   } WLR_PRIVATE;
+};
+
+/** Inputs of the scene surface geometry pipeline, snapshotted at the last
+ * reconfigure. Lets the expensive opaque/clip/color math be skipped when a
+ * commit changes none of them. */
+struct wlr_scene_surface_geom {
+  bool applied; // the scene buffer currently shows the results computed from these inputs
+  struct wlr_box clip;
+  double scale;
+  int width, height; // surface-local
+  int buffer_width, buffer_height;
+  enum wl_output_transform transform;
+  struct wlr_fbox src_box; // pre-clip buffer source box
+  enum wlr_color_encoding color_encoding;
+  enum wlr_color_range color_range;
+  pixman_region32_t opaque; // surface opaque region snapshot
+  // Scene buffer geometry as the last apply left it. Compared against the live
+  // buffer so an external writer of src_box or the dest size (the view layer's
+  // crop) misses the cache and heals on the next commit instead of being
+  // silently overwritten by a skipped apply.
+  struct wlr_fbox applied_src_box;
+  int applied_dest_width, applied_dest_height;
 };
 
 /** A scene-graph node displaying a single surface. */
@@ -189,6 +234,8 @@ struct wlr_scene_surface {
     struct wl_listener frame_done;
     struct wl_listener surface_destroy;
     struct wl_listener surface_commit;
+
+    struct wlr_scene_surface_geom geom;
   } WLR_PRIVATE;
 };
 
@@ -597,6 +644,43 @@ void wlr_scene_set_gamma_control_manager_v1(
 void wlr_scene_set_color_manager_v1(struct wlr_scene* scene, struct wlr_color_manager_v1* manager);
 
 /**
+ * Overrides the preferred client scale derived when a surface's outputs
+ * change. `get` answers with the scale clients should render at for the given
+ * output; answers of 0 or below exclude that output from the derivation. A
+ * scene without a provider is a render-only mirror: it keeps output membership
+ * for frame pacing but publishes no scale hints to its surfaces' clients.
+ */
+void wlr_scene_set_preferred_scale_provider(
+    struct wlr_scene* scene, double (*get)(struct wlr_output* output, struct wlr_surface* surface, void* data),
+    void* data
+);
+
+/**
+ * Chooses how minified scene buffers are sampled. Sources that are not
+ * minified and buffers that pin WLR_SCALE_FILTER_NEAREST are unaffected.
+ * Changing the mode damages every output of the scene, because a mirror such
+ * as a window-capture source renders only when its scene has damage.
+ * Defaults to WLR_SCENE_DOWNSAMPLE_BILINEAR in the library; Umbriel's shell
+ * sets the mode from `appearance.downsample`, which defaults to box.
+ */
+void wlr_scene_set_downsample_mode(struct wlr_scene* scene, enum wlr_scene_downsample_mode mode);
+
+/**
+ * Whether a source box samples less than the whole buffer, i.e. has a crop
+ * edge that box taps could reach past. A scene surface always carries a source
+ * box — wlr_surface_get_buffer_source_box() reports the full buffer when the
+ * client set no viewport — so this compares extents instead of testing for an
+ * empty box. A whole-buffer source needs no sampling clamp: taps that leave it
+ * land in the texture's own edge, which GL_CLAMP_TO_EDGE already duplicates.
+ */
+static inline bool wlr_scene_source_box_is_cropped(const struct wlr_fbox* box, int texture_width, int texture_height) {
+  if (wlr_fbox_empty(box)) {
+    return false;
+  }
+  return box->x > 0.0 || box->y > 0.0 || box->width < texture_width || box->height < texture_height;
+}
+
+/**
  * Add a node displaying nothing but its children.
  */
 struct wlr_scene_tree* wlr_scene_tree_create(struct wlr_scene_tree* parent);
@@ -1001,6 +1085,14 @@ void wlr_scene_buffer_set_buffer_with_options(
     struct wlr_scene_buffer* scene_buffer, struct wlr_buffer* buffer,
     const struct wlr_scene_buffer_set_buffer_options* options
 );
+
+/**
+ * Marks a client buffer as safe for in-place shm damage even though another scene buffer keeps a lock on it, the way
+ * wlr_scene_surface marks its own lock, and returns the client buffer to undo the mark with. Returns NULL when
+ * `buffer` is not a client buffer, or is a single-pixel buffer whose color the scene caches.
+ */
+struct wlr_client_buffer* umbrielfx_scene_buffer_ignore_client_lock(struct wlr_buffer* buffer);
+void umbrielfx_scene_buffer_drop_ignored_client_lock(struct wlr_client_buffer* buffer);
 
 /**
  * Sets the buffer's opaque region. This is an optimization hint used to

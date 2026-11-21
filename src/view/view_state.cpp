@@ -104,12 +104,21 @@ namespace umbriel {
   }
 
   void View::setMaximized(bool maximized, bool animate) {
+    if (maximized) {
+      // A maximize re-places a window that has to be seen, so a conceal in flight is dropped.
+      abandonMinimizeTransition();
+    }
     if (m_tiled && m_workspace != nullptr) {
+      const int column = m_workspace->layout().columnOf(this);
+      if ((column >= 0 && m_workspace->layout().isFullWidth(column) != maximized)
+          || scheduledMaximized() != maximized
+          || m_maximizedToEdges) {
+        cancelResizeGrab();
+      }
       m_floatingMaximized = false;
       if (m_maximizedToEdges) {
         setMaximizedToEdges(false);
       }
-      const int column = m_workspace->layout().columnOf(this);
       if (column >= 0 && m_workspace->layout().isFullWidth(column) != maximized) {
         m_workspace->layout().toggleFullWidth(column);
       }
@@ -120,6 +129,9 @@ namespace umbriel {
       return;
     }
 
+    if (maximized || m_floatingMaximized || scheduledMaximized()) {
+      cancelResizeGrab();
+    }
     // Record the target before cancelSizeAnimation synchronizes the current
     // presentation back through ScratchpadManager.
     m_floatingMaximized = maximized;
@@ -189,7 +201,7 @@ namespace umbriel {
     if (m_tiled || !m_mapped || !m_floatingMaximized || m_workspace == nullptr || scheduledFullscreen()) {
       return;
     }
-    if (m_server->cursor()->isDraggingView(this)) {
+    if (sizeGrabActive()) {
       return;
     }
     const wlr_box box = floatingMaximizedBox(floatingUsableArea());
@@ -296,8 +308,28 @@ namespace umbriel {
     if (minimized) {
       m_minimizeSerial = ++gNextMinimizeSerial;
     }
-    if (m_sceneTree != nullptr) {
-      setNodeEnabled(!minimized && m_mapped && m_onActiveWorkspace);
+    // A conceal animates the live window out before the node goes; a reveal grows it back from the same box. Both are
+    // skipped when there is nothing on screen to animate.
+    const auto& animation = config().animation;
+    const bool animateMinimize = animation.enabled
+        && animation.windowsMinimize.enabled
+        && m_sceneTree != nullptr
+        && m_mapped
+        && m_onActiveWorkspace
+        && minimizable()
+        && !scheduledFullscreen()
+        && !currentFullscreen();
+    if (minimized && animateMinimize) {
+      beginMinimizeConceal();
+    } else if (!minimized && animateMinimize) {
+      beginMinimizeReveal();
+    } else {
+      // A running transition has no better ending here: put the window back rather than let a pending finish hide it
+      // after it was restored.
+      abandonMinimizeTransition();
+      if (m_sceneTree != nullptr) {
+        setNodeEnabled(!minimized && m_mapped && m_onActiveWorkspace);
+      }
     }
     if (m_foreign != nullptr) {
       wlr_foreign_toplevel_handle_v1_set_minimized(m_foreign, minimized);
@@ -364,6 +396,7 @@ namespace umbriel {
     if (!roleInitialized() || maximized == m_maximizedToEdges) {
       return;
     }
+    cancelResizeGrab();
     const bool leavingFullscreen = maximized && scheduledFullscreen();
     if (leavingFullscreen) {
       setFullscreen(false, FullscreenExitLayout::DeferToCaller);
@@ -654,6 +687,7 @@ namespace umbriel {
         || pinned == m_pinned) {
       return;
     }
+    cancelResizeGrab();
     if (pinned) {
       m_restoreTiledAfterUnpin = m_tiled;
       if (m_tiled) {
@@ -756,6 +790,7 @@ namespace umbriel {
     if (m_tiled == wantTiled) {
       return;
     }
+    cancelResizeGrab();
     // A window shows before it joins the layout, which cannot hold a hidden tile.
     if (!floating && m_minimized) {
       setMinimized(false);
@@ -979,6 +1014,11 @@ namespace umbriel {
 
   void View::setFullscreen(bool fullscreen, FullscreenExitLayout exitLayout) {
     assert(!attached());
+    if (fullscreen || scheduledFullscreen() || currentFullscreen()) {
+      // Fullscreen re-places a window that must be visible, so a conceal in flight is dropped.
+      abandonMinimizeTransition();
+      cancelResizeGrab();
+    }
     m_deferredUnfullscreen.clear();
     const bool refreshHoverFocus = !fullscreen
         && m_mapped
@@ -989,9 +1029,14 @@ namespace umbriel {
         "set_fullscreen '{}' [{}] -> {} (tiled={}, ws_active={})", appId() != nullptr ? appId() : "?",
         static_cast<const void*>(this), fullscreen, m_tiled, m_workspace != nullptr && m_workspace->active()
     );
-    if (fullscreen && m_maximizedToEdges) {
-      setMaximizedToEdges(false, false);
-      m_restoreMaximizedToEdges = true;
+    if (fullscreen) {
+      if (Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isResizingView(this)) {
+        cursor->resetMode();
+      }
+      if (m_maximizedToEdges) {
+        setMaximizedToEdges(false, false);
+        m_restoreMaximizedToEdges = true;
+      }
     }
     if (fullscreen && !m_tiled && !scheduledFullscreen() && !currentFullscreen()) {
       // A requested resize or move may still be awaiting its client buffer or animation. Restore its target geometry.
@@ -1127,5 +1172,8 @@ namespace umbriel {
       m_server->cursor()->refocusAfterSceneChange();
     }
     refreshStateRuleEffects();
+    // The border effect gate reads scheduledFullscreen(); refresh it even when
+    // no animation is progressing (a frozen clock may never tick again).
+    syncAnimationEffects();
   }
 } // namespace umbriel
