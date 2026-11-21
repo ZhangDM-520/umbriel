@@ -87,6 +87,8 @@ Drag a window over an open scratchpad on any output and release it there: the wi
 
 Two drags are declined and stay on their workspace: a lifted tab group, and a pinned window. A declined drop never animates above the pad.
 
+While you are dragging a window it belongs to the drag, not to a pad, so the scratchpad window actions do not apply to it: `window-move-to-scratchpad`, `window-restore-from-scratchpad`, `window-toggle-scratchpad` and a move to a workspace report an error and change nothing until you release. Opening or closing the pad itself still works, and the drop decides what happens: a window released over the visible pad joins it, and a member released while its pad is hidden leaves the pad and lands on the workspace where you dropped it. Closing a pad under a drag does not take its member off screen, and opening one does not pull the dragged window out of the pointer's hands.
+
 Moving a window into a scratchpad with `window-move-to-scratchpad` uses the pad's output. A pad that is still showing keeps that output even when it is empty, so the window joins it there instead of following the pointer; a hidden pad appears on the pointer's output the next time it is shown.
 
 ### Window rules

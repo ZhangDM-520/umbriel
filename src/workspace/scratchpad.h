@@ -60,6 +60,15 @@ namespace umbriel {
     // `sourceWorkspace` as where a restore returns it. False when no pad is visible on that output, or the pad refuses
     // the window.
     [[nodiscard]] bool dropInto(View* view, Output* output, Workspace* sourceWorkspace, int dropX, int dropY);
+    // Take a member the pointer released back out of its pad, onto the active workspace of `output`. The release calls
+    // this only for a hidden pad, so the window does not vanish with the pad.
+    void dropOut(View* view, Output* output);
+    // Whether `view` is a member of a pad that is not showing. A visible pad follows a released member to the output
+    // it was dropped on, so only a hidden pad lets the window go.
+    [[nodiscard]] bool memberOfHiddenPad(const View* view) const;
+    // A member of `name` that the pointer is carrying, if any. A hidden pad has no focused member to name, so this is
+    // the window an action reaching that pad would disturb.
+    [[nodiscard]] View* carriedMember(std::string_view name) const;
     [[nodiscard]] bool
     assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
     [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
@@ -150,7 +159,7 @@ namespace umbriel {
     bool hasEntries(std::string_view name) const;
     // Whether the pad shown on `output` has a window to interact with, which is what makes its backdrop take pointer
     // input. A hidden pad with members on the same output contributes nothing.
-    bool showsEntriesOn(const Output* output) const;
+    bool hasVisibleEntriesOn(const Output* output) const;
     // Whether `view`, a member of `scratchpad`, is on screen.
     static bool presents(const Scratchpad& scratchpad, const View* view);
     // Whether `view` is a dialog of another member of scratchpad `name`, shown along with that member.
@@ -161,7 +170,10 @@ namespace umbriel {
     // Called as `view` leaves scratchpad `name`: if it was the window focused last, a dialog hands that over to the
     // nearest window of the scratchpad it was opened from, and any other window clears it.
     void forgetLastFocused(Scratchpad& scratchpad, std::string_view name, const View* view) const;
-    enum class Admission { Interactive, Automatic };
+    // `Drop` is the pointer releasing a window: the one admission that applies to the view the grab is carrying.
+    enum class Admission { Interactive, Automatic, Drop };
+    // Whether the pointer is carrying `view`, which keeps it out of every pad until the button is released.
+    bool isCarried(const View* view) const;
     // Whether a window leaving the pad dissolves in on its workspace, or lands fully visible because nothing of it is
     // on screen.
     enum class RestoreTransition { Snap, Animated };
@@ -178,7 +190,10 @@ namespace umbriel {
         View* view, const wlr_box& previousArea, const wlr_box& targetArea, bool proportionalSize,
         bool reposition = true
     );
-    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition);
+    bool restoreView(
+        View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition,
+        bool allowCarried = false
+    );
     // Retarget the backdrop dim/blur fade for `output` and refresh its scene nodes.
     void retargetBackdrop(Output* output, bool visible, bool animateTransition = true);
     wlr_scene_rect* dimRectFor(Output* output);
