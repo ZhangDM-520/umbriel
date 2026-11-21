@@ -192,6 +192,8 @@ namespace umbriel {
     bool isResizingWorkspace(const Workspace* workspace) const;
     // Applies pointer motion a tiled resize on this workspace deferred while its last step waited for clients.
     void resumeTiledResize(const Workspace* workspace);
+    // Whether a tiled resize grab still owns a window the layout can resize.
+    [[nodiscard]] bool tiledResizeTargetValid(const TiledResizeGrab& grab) const;
     // Logs the tiled resize step once Workspace::arrange() has updated presented boxes.
     void traceTiledResizeStep(const Workspace* workspace);
     // Clears any pending tiled trace step when a workspace arrange returns early without presenting.

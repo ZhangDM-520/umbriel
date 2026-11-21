@@ -40,6 +40,41 @@ namespace umbriel {
     template <wlr_direction D> bool actionColumnMoveToOutput(Server& server, const Keybind& bind, std::string* error);
     void finishWorkspaceTransfer(Server& server, View& focused);
 
+    // Whether the pointer is carrying `view`. A carried window belongs to the drag: it is outside every pad and out of
+    // reach of the layout until the button is released.
+    bool carried(Server& server, const View* view) {
+      const Cursor* cursor = server.cursor();
+      return view != nullptr && cursor != nullptr && cursor->isDraggingView(view);
+    }
+
+    // Refuses an action that would move a carried window, with the reason the caller sees over IPC.
+    bool refuseCarried(Server& server, const View* view, std::string* error) {
+      if (!carried(server, view)) {
+        return false;
+      }
+      if (error != nullptr) {
+        *error = "the window is being dragged";
+      }
+      return true;
+    }
+
+    // Refuses a scratchpad window action whose target is the window the pointer carries. A hidden pad has no focused
+    // entry to name, and a carried window can belong to another pad, so the seat's focus stands in for the target.
+    bool refuseCarriedTarget(
+        Server& server, const ScratchpadManager& scratchpad, std::string_view name, std::string* error
+    ) {
+      View* carriedView = scratchpad.carriedMember(name);
+      if (carriedView == nullptr) {
+        return refuseCarried(server, focusedWindow(server), error);
+      }
+      // A visible pad names the member the action would move; with none to name, any carried member is in flight.
+      View* focused = scratchpad.focused(name);
+      if (focused != nullptr && focused != carriedView) {
+        return false;
+      }
+      return refuseCarried(server, carriedView, error);
+    }
+
     std::optional<std::string_view> scratchpadName(Server& server, const Keybind& bind, std::string* error) {
       const auto* arg = payloadIf<ScratchpadArg>(bind);
       ScratchpadManager* manager = server.scratchpadManager();
@@ -215,6 +250,9 @@ namespace umbriel {
     // land proportionally via their remembered usable-area fraction. With `follow` clear the window lands on `target`
     // while the seat stays on the source workspace and the cursor stays where it was.
     void moveViewToWorkspace(Server& server, View& view, Workspace& target, bool follow = true) {
+      if (carried(server, &view)) {
+        return;
+      }
       Workspace* source = view.workspace();
       const bool workspaceChanged = source != &target;
       ScratchpadManager* scratchpad = server.scratchpadManager();
@@ -1164,7 +1202,7 @@ namespace umbriel {
     }
 
     template <int Direction>
-    bool actionMoveVerticalOrWorkspace(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    bool actionMoveVerticalOrWorkspace(Server& server, const Keybind& /*bind*/, std::string* error) {
       const FocusedMove move = beginFocusedMove(server);
       Workspace* source = windowActionWorkspace(server);
       if (source != nullptr && source->moveFocusedVertical(Direction)) {
@@ -1178,6 +1216,9 @@ namespace umbriel {
           return true;
         }
         if (View* view = placementTarget(server, {}, FocusSource::Layout).value_or(nullptr)) {
+          if (refuseCarried(server, view, error)) {
+            return false;
+          }
           moveViewToWorkspace(server, *view, *target);
         }
       }
@@ -1648,6 +1689,9 @@ namespace umbriel {
           view = placementTarget(server, {}, FocusSource::Recent).value_or(nullptr);
         }
         if (view != nullptr) {
+          if (refuseCarried(server, view, error)) {
+            return false;
+          }
           moveViewToWorkspace(server, *view, **target, follow);
           return true;
         }
@@ -1657,6 +1701,9 @@ namespace umbriel {
         }
       }
       if (bind.action == KeybindAction::ColumnMoveToWorkspace) {
+        if (refuseCarried(server, placementTarget(server, {}, FocusSource::Layout).value_or(nullptr), error)) {
+          return false;
+        }
         moveFocusedColumnToWorkspace(server, **target);
         return true;
       }
@@ -1684,7 +1731,7 @@ namespace umbriel {
     }
 
     template <int Direction, bool Follow>
-    bool actionWindowMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    bool actionWindowMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* error) {
       View* scratchpadView = placementTarget(server, {}, FocusSource::Scratchpad).value_or(nullptr);
       Output* scratchpadOutput =
           scratchpadView != nullptr ? server.scratchpadManager()->outputFor(scratchpadView) : nullptr;
@@ -1700,6 +1747,9 @@ namespace umbriel {
       }
       View* view = scratchpadView != nullptr ? scratchpadView
                                              : placementTarget(server, {}, FocusSource::Layout).value_or(nullptr);
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
       if (view != nullptr) {
         moveViewToWorkspace(server, *view, *target, Follow);
       }
@@ -1707,7 +1757,7 @@ namespace umbriel {
     }
 
     template <int Direction>
-    bool actionColumnMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    bool actionColumnMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* error) {
       Workspace* source = windowActionWorkspace(server);
       if (source == nullptr || source->group() == nullptr) {
         return true;
@@ -1715,6 +1765,9 @@ namespace umbriel {
       Workspace* target = stepWorkspace(*source->group(), source->index(), Direction);
       if (target == nullptr || target == source) {
         return true;
+      }
+      if (refuseCarried(server, placementTarget(server, {}, FocusSource::Layout).value_or(nullptr), error)) {
+        return false;
       }
       moveFocusedColumnToWorkspace(server, *target);
       return true;
@@ -1799,6 +1852,9 @@ namespace umbriel {
       if (view == nullptr) {
         return true; // nothing focused: silent no-op
       }
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
       moveViewToWorkspace(server, *view, *destination);
       return true;
     }
@@ -1843,6 +1899,9 @@ namespace umbriel {
       Workspace* destination = targetGroup != nullptr ? targetGroup->active() : nullptr;
       if (destination == nullptr) {
         return reject(error, "output has no workspace");
+      }
+      if (refuseCarried(server, placementTarget(server, {}, FocusSource::Layout).value_or(nullptr), error)) {
+        return false;
       }
       moveFocusedColumnToWorkspace(server, *destination); // nothing focused: silent no-op
       return true;
@@ -2107,9 +2166,15 @@ namespace umbriel {
       if (!name || output == nullptr) {
         return false;
       }
-      View* view = placementTarget(server, {}, FocusSource::Workspace).value_or(nullptr);
       ScratchpadManager* scratchpad = server.scratchpadManager();
-      return scratchpad != nullptr && (view == nullptr || scratchpad->moveToScratchpad(view, *name, output));
+      if (scratchpad == nullptr || refuseCarriedTarget(server, *scratchpad, *name, error)) {
+        return false;
+      }
+      View* view = placementTarget(server, {}, FocusSource::Workspace).value_or(nullptr);
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
+      return view == nullptr || scratchpad->moveToScratchpad(view, *name, output);
     }
 
     bool actionScratchpadToggle(Server& server, const Keybind& bind, std::string* error) {
@@ -2139,7 +2204,13 @@ namespace umbriel {
         return false;
       }
       ScratchpadManager* scratchpad = server.scratchpadManager();
-      return scratchpad != nullptr && scratchpad->restoreFocused(*name);
+      if (scratchpad == nullptr) {
+        return false;
+      }
+      if (refuseCarriedTarget(server, *scratchpad, *name, error)) {
+        return false;
+      }
+      return scratchpad->restoreFocused(*name);
     }
 
     // Restores the focused window if it is the scratchpad's focused entry, otherwise moves it into the scratchpad.
@@ -2153,10 +2224,16 @@ namespace umbriel {
       if (scratchpad == nullptr) {
         return false;
       }
+      if (refuseCarriedTarget(server, *scratchpad, *name, error)) {
+        return false;
+      }
       if (focusedScratchpadWindow(server) != nullptr && scratchpad->hasFocus(*name)) {
         return scratchpad->restoreFocused(*name);
       }
       View* view = placementTarget(server, {}, FocusSource::Workspace).value_or(nullptr);
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
       return view == nullptr || scratchpad->moveToScratchpad(view, *name, output);
     }
 
