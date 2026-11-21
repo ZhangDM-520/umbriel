@@ -131,7 +131,7 @@ The rework **rebased it onto #844's head `8bc74d76`** and added one commit that 
 return std::optional<nlohmann::json>(resp["ok"]);
 ```
 
-This host carries a GCC 17 snapshot that resolves the ambiguity, so a local green build does not vouch for this file — only CI's glibc job does. Owner: `cli` (#806); nightly carries it until the branch does.
+This host carries a GCC 17 snapshot that resolves the ambiguity, so a local green build does not vouch for this file. **No CI vouches for it either: this fork's Actions are disabled** (see `## Gate`), so the line is carried on the argument alone and is re-checked by upstream's own CI when #806 is ready. Owner: `cli` (#806); nightly carries it until the branch does.
 
 ### C8 — 17 × nightly, four files, one hunk each (standing resolution, owned by this branch)
 
@@ -183,6 +183,14 @@ Row 20's second commit routes "the pointer owns this view" through one predicate
 Do **not** widen `isCarried()` to cover resizing: it is also the admission and restore guard, where a resize grab is handled by cancelling the grab rather than by refusing the operation, which is the accepted row-15 policy.
 
 Falsification, honestly reported: the drag half is pinned by row 20's own `scratchpad/drag_pad_actions`, but **both resize halves are unobserved**. Dropping the hunk-1 clause leaves all 28 of `scratchpad/` green, and so does dropping the hunk-2 clause; only `-Werror` notices the orphaned `cursor` local. A usable-area change or a pad-definition reload during a resize grab is not covered anywhere. The follow-up belongs on `feat/resize-physics`: drive either case from a harness check. Owner: `feat/scratchpad-drop-adopt` for the drag half, `feat/resize-physics` for the resize half; both are fresh against upstream, so no report exists.
+
+## Gate
+
+The gate is local, and it is the only gate: `just build debug`, the unit binaries, the harness over every area a row touches, `just format-docs-check`, and `clang-tidy` with the lint recipe's own flags. Record the command and its output in the round's log, and report the reds that reproduce on `upstream/main` separately from the ones the round introduced.
+
+**This fork runs no CI, by decision.** GitHub Actions is disabled on `ZhangDM-520/umbriel-nightly` — `gh workflow run` and the raw dispatch endpoint both answer HTTP 422 "Actions has been disabled for this repository", the workflows still report `active`, and `allowed_actions` is `local_only`. GitHub's own `pull_request` path stopped producing runs after `bc10febd`. The owner's ruling on 2026-11-21: the fork's CI is not worth repairing, because this branch is never proposed from the fork — it exists to be rebuilt locally, and the work reaches CI through each member's own pull request upstream. So a claim about this branch is a claim about a local run, and nothing here is CI-vouched. Do not report a check as pending, and do not treat a missing run as a failure.
+
+The two consequences to remember: C7's `optional<json>` conversion is unverified by any compiler this host can run, and the `pull_request` trigger on the fork's workflows is dead weight that a future rebuild should not rely on.
 
 ## Rules
 
