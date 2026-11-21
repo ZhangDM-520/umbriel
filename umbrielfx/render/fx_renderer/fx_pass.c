@@ -535,6 +535,9 @@ out:
   if (pass->fx_offscreen_buffers != NULL && !pass->group_used) {
     fx_offscreen_buffers_clear_group(pass->fx_offscreen_buffers);
   }
+  if (pass->fx_offscreen_buffers != NULL && pass->trim_output_animation_buffers && ok && !pass->animation_failed) {
+    fx_offscreen_buffers_trim_output_animation(pass->fx_offscreen_buffers, &pass->output_animation_used);
+  }
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   pop_fx_debug(renderer);
@@ -743,6 +746,13 @@ push_capture_slot(struct fx_gles_render_pass* pass, const struct wlr_box* box, b
   if (group) {
     pass->group_depth = pass->animation_depth;
     pass->group_used = true;
+  }
+  if (buffers == &pass->fx_offscreen_buffers->output) {
+    if (shadow_blur) {
+      pass->output_animation_used.shadow_blur = true;
+    } else if (pass->animation_depth > pass->output_animation_used.depth) {
+      pass->output_animation_used.depth = pass->animation_depth;
+    }
   }
   pass->buffer = target;
   pass->suppress_updated = true;
@@ -1505,6 +1515,9 @@ void fx_render_pass_effect_in_place(struct fx_gles_render_pass* pass, const stru
   struct fx_framebuffer* source = ensure_offscreen_buffer(pass, &target_buffers(pass)->in_place_source, true);
   if (source == NULL) {
     return;
+  }
+  if (target_buffers(pass) == &pass->fx_offscreen_buffers->output) {
+    pass->output_animation_used.in_place = true;
   }
   pixman_region32_t region;
   pixman_region32_init_rect(&region, visible.x, visible.y, visible.width, visible.height);
@@ -2279,6 +2292,9 @@ static struct fx_framebuffer* animation_backdrop(
   struct fx_framebuffer* target = ensure_offscreen_buffer(pass, &target_buffers(pass)->animation_backdrop, true);
   if (target == NULL) {
     return saved;
+  }
+  if (target_buffers(pass) == &pass->fx_offscreen_buffers->output) {
+    pass->output_animation_used.backdrop = true;
   }
   pixman_region32_t backdrop_clip;
   init_blur_damage_region(
@@ -3132,6 +3148,16 @@ static void render_blur_composite(
 }
 
 void fx_render_pass_add_blur(struct fx_gles_render_pass* pass, struct fx_render_blur_pass_options* fx_options) {
+  if (fx_options->blur_data == NULL || fx_options->blur_strength <= 0.0F) {
+    return;
+  }
+  const bool has_strength = fx_options->blur_strength < 1.0F;
+  struct blur_data effective_blur = has_strength
+      ? blur_data_apply_strength(fx_options->blur_data, fx_options->blur_strength)
+      : *fx_options->blur_data;
+  if (!is_scene_blur_enabled(&effective_blur)) {
+    return;
+  }
   if (pass->fx_offscreen_buffers == NULL) {
     wlr_log(WLR_ERROR, "FX Pass offscreen buffers not initialized. Skipping blur...");
     return;
@@ -3143,7 +3169,6 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass* pass, struct fx_render_
   TRACY_BOTH_ZONES_START(renderer);
   push_fx_debug(renderer);
 
-  const bool has_strength = fx_options->blur_strength < 1.0;
   struct fx_offscreen_buffers* fbos = pass->fx_offscreen_buffers;
   // The optimized buffers only hold content once an optimized blur node has
   // rendered on this output at the current size. Without that, blur the live
@@ -3167,39 +3192,36 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass* pass, struct fx_render_
       // Isn't as efficient as just using the optimized blur buffer
       blur_options.current_buffer = fbos->optimized_no_blur_buffer;
     } else {
-      struct blur_data effective_blur = blur_data_apply_strength(fx_options->blur_data, fx_options->blur_strength);
       blur_options.current_buffer = animation_backdrop(pass, fx_options, &effective_blur);
     }
     buffer = get_main_buffer_blur(pass, &blur_options, fuse, fuse ? &final_upsample : NULL);
   } else {
-    final_upsample = blur_data_apply_strength(fx_options->blur_data, fx_options->blur_strength);
-    if (is_scene_blur_enabled(&final_upsample)) {
-      if (fuse) {
-        buffer = fbos->optimized_blur_buffer;
-      } else {
-        struct fx_framebuffer* full_buffer =
-            ensure_offscreen_buffer(pass, &target_buffers(pass)->effects_buffer_swapped, true);
-        if (full_buffer != NULL) {
-          struct fx_render_blur_pass_options upsample_opts = *fx_options;
-          const struct wlr_box full_bounds = {0, 0, pass->buffer->buffer->width, pass->buffer->buffer->height};
-          pixman_region32_t damage;
-          init_blur_damage_region(
-              &damage, fx_options->tex_options.base.clip, NULL, &final_upsample, full_bounds.width, full_bounds.height
-          );
-          upsample_opts.current_buffer = fbos->optimized_blur_buffer;
-          upsample_opts.blur_data = &final_upsample;
-          upsample_opts.tex_options.base.transform = WL_OUTPUT_TRANSFORM_NORMAL;
-          upsample_opts.tex_options.base.filter_mode = WLR_SCALE_FILTER_BILINEAR;
-          upsample_opts.tex_options.base.clip = &damage;
-          render_blur_segments(
-              pass, &upsample_opts, &renderer->shaders.blur2, &renderer->shaders.blur2_with_effects, 2, &full_bounds,
-              full_buffer
-          );
-          pixman_region32_fini(&damage);
-          fx_framebuffer_bind(pass->buffer);
-          glViewport(0, 0, pass->buffer->buffer->width, pass->buffer->buffer->height);
-          buffer = full_buffer;
-        }
+    final_upsample = effective_blur;
+    if (fuse) {
+      buffer = fbos->optimized_blur_buffer;
+    } else {
+      struct fx_framebuffer* full_buffer =
+          ensure_offscreen_buffer(pass, &target_buffers(pass)->effects_buffer_swapped, true);
+      if (full_buffer != NULL) {
+        struct fx_render_blur_pass_options upsample_opts = *fx_options;
+        const struct wlr_box full_bounds = {0, 0, pass->buffer->buffer->width, pass->buffer->buffer->height};
+        pixman_region32_t damage;
+        init_blur_damage_region(
+            &damage, fx_options->tex_options.base.clip, NULL, &final_upsample, full_bounds.width, full_bounds.height
+        );
+        upsample_opts.current_buffer = fbos->optimized_blur_buffer;
+        upsample_opts.blur_data = &final_upsample;
+        upsample_opts.tex_options.base.transform = WL_OUTPUT_TRANSFORM_NORMAL;
+        upsample_opts.tex_options.base.filter_mode = WLR_SCALE_FILTER_BILINEAR;
+        upsample_opts.tex_options.base.clip = &damage;
+        render_blur_segments(
+            pass, &upsample_opts, &renderer->shaders.blur2, &renderer->shaders.blur2_with_effects, 2, &full_bounds,
+            full_buffer
+        );
+        pixman_region32_fini(&damage);
+        fx_framebuffer_bind(pass->buffer);
+        glViewport(0, 0, pass->buffer->buffer->width, pass->buffer->buffer->height);
+        buffer = full_buffer;
       }
     }
   }
@@ -3270,15 +3292,28 @@ finish:
   TRACY_BOTH_ZONES_END;
 }
 
+static bool optimized_blur_usable(const struct fx_gles_render_pass* pass, const struct fx_offscreen_buffers* fbos) {
+  return pass->group_depth == 0
+      && fbos != NULL
+      && fbos->optimized_blur_buffer != NULL
+      && fbos->optimized_blur_valid
+      && fbos->optimized_blur_sdr_tf == linear_sdr_tf(pass)
+      && optimized_buffers_fit(pass, fbos);
+}
+
 bool fx_render_pass_optimized_blur_stale(const struct fx_gles_render_pass* pass) {
   const struct fx_offscreen_buffers* fbos = pass->fx_offscreen_buffers;
   // A group capture neither draws the output blur nor can render it.
   return pass->group_depth == 0
       && fbos != NULL
       && fbos->optimized_blur_buffer != NULL
-      && (!fbos->optimized_blur_valid
-          || fbos->optimized_blur_sdr_tf != linear_sdr_tf(pass)
-          || !optimized_buffers_fit(pass, fbos));
+      && !optimized_blur_usable(pass, fbos);
+}
+
+bool fx_render_pass_has_usable_optimized_blur(const struct fx_gles_render_pass* pass, struct wlr_output* output) {
+  const struct fx_offscreen_buffers* fbos =
+      pass->fx_offscreen_buffers != NULL ? pass->fx_offscreen_buffers : fx_offscreen_buffers_lookup(output);
+  return optimized_blur_usable(pass, fbos);
 }
 
 bool fx_render_pass_add_optimized_blur(
@@ -3367,9 +3402,6 @@ bool fx_render_pass_add_optimized_blur(
     }
     pixman_region32_fini(&expanded_clip);
     fbos->optimized_blur_valid = rendered;
-    if (rendered) {
-      fbos->optimized_blur_evicted = false;
-    }
     fbos->optimized_blur_sdr_tf = linear_sdr_tf(pass);
   }
 

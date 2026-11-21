@@ -67,13 +67,24 @@ static void drop_framebuffer(struct fx_framebuffer** buffer) {
   *buffer = NULL;
 }
 
-static void clear_animation_buffers(struct fx_target_buffers* buffers) {
-  for (size_t i = 0; i < FX_ANIMATION_DEPTH; i++) {
+static void trim_animation_buffers(struct fx_target_buffers* buffers, const struct fx_animation_buffer_usage* keep) {
+  for (size_t i = keep->depth; i < FX_ANIMATION_DEPTH; i++) {
     drop_framebuffer(&buffers->animation_buffers[i]);
   }
-  drop_framebuffer(&buffers->animation_backdrop);
-  drop_framebuffer(&buffers->animation_shadow_blur);
-  drop_framebuffer(&buffers->in_place_source);
+  if (!keep->backdrop) {
+    drop_framebuffer(&buffers->animation_backdrop);
+  }
+  if (!keep->shadow_blur) {
+    drop_framebuffer(&buffers->animation_shadow_blur);
+  }
+  if (!keep->in_place) {
+    drop_framebuffer(&buffers->in_place_source);
+  }
+}
+
+static void clear_animation_buffers(struct fx_target_buffers* buffers) {
+  const struct fx_animation_buffer_usage none = {0};
+  trim_animation_buffers(buffers, &none);
 }
 
 static void clear_target_blur_buffers(struct fx_target_buffers* buffers) {
@@ -86,7 +97,8 @@ static void clear_target_buffers(struct fx_target_buffers* buffers) {
   clear_target_blur_buffers(buffers);
 }
 
-static void clear_blur_buffers(struct fx_offscreen_buffers* fbos) {
+static bool clear_blur_buffers(struct fx_offscreen_buffers* fbos) {
+  const bool had_optimized = fbos->optimized_blur_buffer != NULL || fbos->optimized_no_blur_buffer != NULL;
   clear_target_blur_buffers(&fbos->output);
   clear_target_blur_buffers(&fbos->group);
   drop_framebuffer(&fbos->optimized_blur_buffer);
@@ -95,13 +107,13 @@ static void clear_blur_buffers(struct fx_offscreen_buffers* fbos) {
   fbos->optimized_blur_source_width = 0;
   fbos->optimized_blur_source_height = 0;
   fbos->optimized_blur_valid = false;
+  return had_optimized;
 }
 
 static void clear_effect_buffers(struct fx_offscreen_buffers* fbos) {
   clear_animation_buffers(&fbos->output);
   clear_animation_buffers(&fbos->group);
   clear_blur_buffers(fbos);
-  fbos->optimized_blur_evicted = false;
 }
 
 static void addon_handle_destroy(struct wlr_addon* addon) {
@@ -145,7 +157,13 @@ void fx_offscreen_buffers_destroy(struct fx_offscreen_buffers* fbos) { addon_han
 
 void fx_offscreen_buffers_clear_group(struct fx_offscreen_buffers* fbos) { clear_target_buffers(&fbos->group); }
 
-static struct fx_offscreen_buffers* lookup_offscreen_buffers(struct wlr_output* output) {
+void fx_offscreen_buffers_trim_output_animation(
+    struct fx_offscreen_buffers* fbos, const struct fx_animation_buffer_usage* keep
+) {
+  trim_animation_buffers(&fbos->output, keep);
+}
+
+struct fx_offscreen_buffers* fx_offscreen_buffers_lookup(struct wlr_output* output) {
   if (output == NULL) {
     return NULL;
   }
@@ -158,14 +176,14 @@ static struct fx_offscreen_buffers* lookup_offscreen_buffers(struct wlr_output* 
 }
 
 void fx_renderer_clear_output_effect_buffers(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
   if (fbos != NULL) {
     clear_effect_buffers(fbos);
   }
 }
 
 void fx_renderer_clear_animation_buffers(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
   if (fbos == NULL) {
     return;
   }
@@ -174,45 +192,41 @@ void fx_renderer_clear_animation_buffers(struct wlr_output* output) {
 }
 
 bool fx_renderer_clear_blur_buffers(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
   if (fbos == NULL) {
     return false;
   }
-  const bool had_optimized = fbos->optimized_blur_buffer != NULL || fbos->optimized_no_blur_buffer != NULL;
-  clear_blur_buffers(fbos);
-  if (had_optimized) {
-    fbos->optimized_blur_evicted = true;
+  return clear_blur_buffers(fbos);
+}
+
+void fx_renderer_clear_blur_saved_pixels(struct wlr_output* output) {
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
+  if (fbos == NULL) {
+    return;
   }
-  return had_optimized;
+  drop_framebuffer(&fbos->blur_saved_pixels_buffer);
 }
 
 void fx_renderer_clear_optimized_no_blur(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
   if (fbos == NULL) {
     return;
   }
   drop_framebuffer(&fbos->optimized_no_blur_buffer);
 }
 
+bool fx_renderer_has_optimized_blur(struct wlr_output* output) {
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
+  return fbos != NULL && fbos->optimized_blur_buffer != NULL && fbos->optimized_blur_valid;
+}
+
 bool fx_renderer_has_optimized_no_blur(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
   return fbos != NULL && fbos->optimized_no_blur_buffer != NULL;
 }
 
-bool fx_renderer_has_optimized_blur_evicted(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
-  return fbos != NULL && fbos->optimized_blur_evicted;
-}
-
-void fx_renderer_clear_optimized_blur_evicted(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
-  if (fbos != NULL) {
-    fbos->optimized_blur_evicted = false;
-  }
-}
-
 void fx_offscreen_buffers_invalidate_blend(struct wlr_output* output) {
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
   if (fbos == NULL) {
     return;
   }
@@ -224,7 +238,7 @@ struct fx_offscreen_buffers* fx_offscreen_buffers_try_get(struct wlr_output* out
   if (!output) {
     return NULL;
   }
-  struct fx_offscreen_buffers* fbos = lookup_offscreen_buffers(output);
+  struct fx_offscreen_buffers* fbos = fx_offscreen_buffers_lookup(output);
   if (fbos != NULL) {
     return fbos;
   }
