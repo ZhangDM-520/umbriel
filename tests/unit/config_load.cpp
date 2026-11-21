@@ -30,6 +30,7 @@ using umbriel::ModRightDoubleClick;
 using umbriel::SdrGamut;
 using umbriel::SdrTransfer;
 using umbriel::TrackLayout;
+using umbriel::UnderfullStripAlign;
 using umbriel::VrrMode;
 using umbriel::WindowDragToggle;
 
@@ -280,7 +281,7 @@ mode = "dwindle"
 extent_presets = [0.05, 0.5, 2.0]
 
 [layout.scrolling]
-center_underfull_strip = false
+underfull_strip = "start"
 always_center_single_column = true
 [layout.dwindle]
 preserve_split = true
@@ -297,7 +298,7 @@ mode = "scrolling"
 extent_presets = [0.25, 0.75]
 
 [workspace.layout.scrolling]
-center_underfull_strip = true
+underfull_strip = "end"
 [workspace.layout.dwindle]
 preserve_split = false
 )");
@@ -313,7 +314,7 @@ preserve_split = false
   CHECK_EQ(store.config().layout.extentPresets[1], 0.5);
   // Above 1.0 loads unclamped (scrolling columns may span several viewports); only the 0.1 floor clamps here.
   CHECK_EQ(store.config().layout.extentPresets[2], 2.0);
-  CHECK(!store.config().layout.scrolling.centerUnderfullStrip);
+  CHECK(store.config().layout.scrolling.underfullStrip == UnderfullStripAlign::Start);
   CHECK(store.config().layout.dwindle.preserveSplit);
   CHECK(store.config().appearance.preferNoCsd);
   CHECK_EQ(store.config().outputs.size(), size_t{1});
@@ -323,7 +324,7 @@ preserve_split = false
   CHECK(store.config().workspaceRules[0].layout.mode == LayoutMode::Scrolling);
   CHECK(store.config().workspaceRules[0].layout.extentPresets.has_value());
   CHECK_EQ(store.config().workspaceRules[0].layout.extentPresets->size(), size_t{2});
-  CHECK(store.config().workspaceRules[0].layout.scrolling.centerUnderfullStrip == true);
+  CHECK(store.config().workspaceRules[0].layout.scrolling.underfullStrip == UnderfullStripAlign::End);
   CHECK(store.config().workspaceRules[0].layout.dwindle.preserveSplit == false);
   CHECK(containsDiagnostic(store, "unknown key unknown_root_key"));
   CHECK(containsDiagnostic(store, "output.DP-1.scale = 9"));
@@ -784,7 +785,7 @@ UMBRIEL_TEST(scrollingDefaultExtentIsOptional) {
   ConfigStore& store = umbriel::configStore();
   store.setRootPath(file.path(), true);
 
-  file.write("[layout.scrolling]\ncenter_underfull_strip = false\n");
+  file.write("[layout.scrolling]\nunderfull_strip = \"start\"\n");
   CHECK(store.reload().success);
   CHECK(!store.config().layout.scrolling.defaultExtentFraction.has_value());
 
@@ -798,9 +799,36 @@ UMBRIEL_TEST(scrollingDefaultExtentIsOptional) {
   CHECK(!store.config().layout.scrolling.defaultExtentFraction.has_value());
   CHECK(containsDiagnostic(store, "unknown key layout.scrolling.default_width_fraction"));
 
-  file.write("[layout.scrolling]\ncenter_underfull_strip = true\n");
+  file.write("[layout.scrolling]\nunderfull_strip = \"end\"\n");
   CHECK(store.reload().success);
   CHECK(!store.config().layout.scrolling.defaultExtentFraction.has_value());
+}
+
+// The placement key round-trips every documented value, and an unknown one is reported and leaves the target alone.
+UMBRIEL_TEST(scrollingUnderfullStripParsesEveryPlacement) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  for (const auto& [name, expected] :
+       {std::pair{"start", UnderfullStripAlign::Start}, std::pair{"center", UnderfullStripAlign::Center},
+        std::pair{"end", UnderfullStripAlign::End}}) {
+    file.write(std::format("[layout.scrolling]\nunderfull_strip = \"{}\"\n", name));
+    CHECK(store.reload().success);
+    CHECK(store.config().layout.scrolling.underfullStrip == expected);
+  }
+  CHECK(!containsDiagnostic(store, "underfull_strip"));
+
+  file.write("[layout.scrolling]\nunderfull_strip = \"left\"\n");
+  CHECK(store.reload().success);
+  // An invalid value leaves the default in place and names the accepted set.
+  CHECK(store.config().layout.scrolling.underfullStrip == UnderfullStripAlign::Center);
+  CHECK(containsDiagnostic(store, "underfull_strip \"left\" (expected \"start\", \"center\", or \"end\")"));
+
+  // The boolean this key replaced is not silently ignored: the unknown-key diagnostic is the migration path.
+  file.write("[layout.scrolling]\ncenter_underfull_strip = true\n");
+  CHECK(store.reload().success);
+  CHECK(containsDiagnostic(store, "unknown key layout.scrolling.center_underfull_strip"));
 }
 
 UMBRIEL_TEST(outputScrollingDefaultExtentUsesNarrowLayoutScope) {

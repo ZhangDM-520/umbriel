@@ -73,6 +73,11 @@ int main(void) {
   OFF(wlr_scene_buffer, single_pixel_buffer_color);
   SIZE(wlr_scene_buffer);
 
+  // wlr_scene_surface
+  OFF(wlr_scene_surface, buffer);
+  OFF(wlr_scene_surface, surface);
+  SIZE(wlr_scene_surface);
+
   // wlr_scene_output
   OFF(wlr_scene_output, output);
   OFF(wlr_scene_output, link);
