@@ -8,7 +8,7 @@ The 2026-11-21 round is a full replay on a base that moved 24 commits, with thre
 
 The order is load-bearing: it is the sequence that produced the fewest conflicts, with each shared file landing where its owner expects it. A member that lands upstream is deleted from this table, not kept "just in case".
 
-Integration state: **complete, 20 of 20 merged** on `upstream/main` = `60639b8f`. `fix/spawn-launch-record` landed upstream as #820 and its row is deleted outright. C3 and C4 are cleared by their owning branches (#715 and #570 rebased); C5 is resolved in place by #844. **C1, C2, C6, C7, C8, C9 and C10 are standing work for this branch**: #733 has not carried the `blur_strength` row, #570's release-rehome block has not reached `upstream-rejected`, `feat/resize-physics` predates four merged members, `feat/cli-completions` has not spelled out its `optional<json>` conversion, `fix/resize-lag` was cut on `c89f6771` before all of them, `feat/scratchpad-restore-fade` predates the minimize timeline, and `fix/overview-scratchpad-fade` predates the blur protocol and the close-snapshot records. All recur on every rebuild until absorbed. Apply them from the recipes below rather than rediscovering them. Nothing here is a merge candidate for upstream — `upstream-rejected` alone guarantees that.
+Integration state: **complete, 20 of 20 merged** on `upstream/main` = `60639b8f`. `fix/spawn-launch-record` landed upstream as #820 and its row is deleted outright. C3 and C4 are cleared by their owning branches (#715 and #570 rebased); C5 is resolved in place by #844. **C1, C2, C6, C7, C8, C9, C10 and C11 are standing work for this branch**: #733 has not carried the `blur_strength` row, #570's release-rehome block has not reached `upstream-rejected`, `feat/resize-physics` predates four merged members, `feat/cli-completions` has not spelled out its `optional<json>` conversion, `fix/resize-lag` was cut on `c89f6771` before all of them, `feat/scratchpad-restore-fade` predates the minimize timeline, `fix/overview-scratchpad-fade` predates the blur protocol and the close-snapshot records, and `feat/scratchpad-drop-adopt` predates the resize grab's own view guard. All recur on every rebuild until absorbed. Apply them from the recipes below rather than rediscovering them. Nothing here is a merge candidate for upstream — `upstream-rejected` alone guarantees that.
 
 **Both branch-owned blockers of the 2026-11-21 attempt are closed at their owners, and this replay carries no provisional union.** `scratchpad-close-animation` (#742) was rebased onto `60639b8f` and now merges clean into both `upstream/main` and this branch, so S1 is retired. `feat/scratchpad-restore-fade` added `d29ba811`, which makes an empty pad's backdrop passive — its dim rect only accepts input while the shown pad has a member — and taught `transient/modal_follow` to dismiss a pad left standing before its overview drop, so S2 is retired. Re-measure both whenever either branch moves: S1 came from upstream movement alone, not from a change on the branch.
 
@@ -35,13 +35,13 @@ The 24 commits between `bc10febd` and this base touch only three files that a me
 | 17 | `fix/resize-lag`                | —                     | `drag`       | **C8**     | cut on `c89f6771`; four hunks, all standing            |
 | 18 | `feat/scratchpad-restore-fade`  | —                     | `scratchpad` | **C9**     | cut on row 17; four hunks, all standing                |
 | 19 | `fix/overview-scratchpad-fade`  | —                     | `scratchpad` | **C10**    | one squashed commit on c89f6771; pad leaves as a card  |
-| 20 | `feat/scratchpad-drop-adopt`    | —                     | `scratchpad` | merged     | stacked on row 18; merges clean after C10              |
+| 20 | `feat/scratchpad-drop-adopt`    | —                     | `scratchpad` | **C11**    | stacked on row 18; one hunk against row 15             |
 
 Every row is merged. A row's `State` names the resolutions it needs on replay, not an outstanding task: the `C` recipes below are applied during the replay, and a row marked `merged` needs nothing. No row is marked stale: every row merges clean into `upstream/main`, which is the test applied before the replay starts.
 
 ## Conflicts
 
-Ownership is decided against `upstream/main`, not against this branch. A collision is **branch-owned** when the branch also fails to merge into `upstream/main`: that branch is stale against the base it targets, and the fix belongs on it. A branch that merges into `upstream/main` cleanly is **fresh**, so the collision it makes here is between two accepted changes and is this branch's job to union. C1, C2, C6, C7, C8, C9 and C10 are fresh-side unions and this branch resolves them; C3, C4 and C5 were stale branches and were fixed at their owners. Row 2 was the stale branch of the previous attempt and has since been rebased, so the replay now runs with no fallback in it.
+Ownership is decided against `upstream/main`, not against this branch. A collision is **branch-owned** when the branch also fails to merge into `upstream/main`: that branch is stale against the base it targets, and the fix belongs on it. A branch that merges into `upstream/main` cleanly is **fresh**, so the collision it makes here is between two accepted changes and is this branch's job to union. C1, C2, C6, C7, C8, C9, C10 and C11 are fresh-side unions and this branch resolves them; C3, C4 and C5 were stale branches and were fixed at their owners. Row 2 was the stale branch of the previous attempt and has since been rebased, so the replay now runs with no fallback in it.
 
 A branch-owned conflict stops the rebuild: write the report, leave the branch at the last clean merge, push nothing. A `resolve:` commit here is the recorded fallback only when the owner agrees it is mechanical, and it is replaced by the rebase once the owner lands one.
 
@@ -52,11 +52,11 @@ Each owner has a forwardable report in the maintainer's private warehouse at `~/
 `fix/overview-scratchpad-fade` was rebuilt as one squashed commit on `c89f6771`, so it no longer merges clean: its review work now rewrites the pad's overview path, its class records and its user-facing sentence, and it meets four earlier members there. Every hunk is a union of accepted changes.
 
 - `src/overview/overview.cpp` — keep `background-blur-protocol`'s `clientRegion` computation (it is read by `card.blur.update(...)` below), then apply the pad rule instead of a flat `1.0F`: `card.blur.setAlpha(card.transient ? std::clamp(1.0 - m_progress, 0.0, 1.0) : 1.0F)`.
-- `src/workspace/scratchpad.h` — drop their `visibleOn()` and keep our `showsEntriesOn()`: row 18 already declares `visibleOn()` in the public accessor block, and keeping both is an overload the compiler refuses. Keep `OverviewHidden` and `m_overviewHidden` beside `TrackedCloseSnapshot` and `m_trackedCloseSnapshots`.
+- `src/workspace/scratchpad.h` — drop their `visibleOn()` and keep our `hasVisibleEntriesOn()` (named `showsEntriesOn()` until row 20 renamed it): row 18 already declares `visibleOn()` in the public accessor block, and keeping both is an overload the compiler refuses. Keep `OverviewHidden` and `m_overviewHidden` beside `TrackedCloseSnapshot` and `m_trackedCloseSnapshots`.
 - `docs/user/scratchpad.md` — take the branch's sentence: a pad fades out *inside the workspace preview it covered*, and a *gesture* that never opens the overview leaves it alone.
 - `src/workspace/scratchpad.cpp` — auto-merges; read it rather than assuming, because it carries both the restore fade's and the drop adoption's edits.
 
-Row 20 is stacked on row 18, so its base is this branch's own merge source and its C6/C9 pairs are already resolved; only the C10 files collide, and only `scratchpad.cpp` does so after this recipe. Falsification: `overview/scratchpad_transition`, `overview/scratchpad_blur`, `overview/scratchpad_cancel`, `overview/scratchpad_open_input` and `scratchpad/empty_stays_open` all pass, and the pad still fades as a card rather than vanishing on the first frame. Owner: `fix/overview-scratchpad-fade`, fresh against upstream, so no report exists.
+Row 20 is stacked on row 18, so its base is this branch's own merge source and its C6/C9 pairs are already resolved; only the C10 files collide, and `scratchpad.cpp` is left to C11. Falsification: `overview/scratchpad_transition`, `overview/scratchpad_blur`, `overview/scratchpad_cancel`, `overview/scratchpad_open_input` and `scratchpad/empty_stays_open` all pass, and the pad still fades as a card rather than vanishing on the first frame. Owner: `fix/overview-scratchpad-fade`, fresh against upstream, so no report exists.
 
 ### C1 — 4 × 5, `docs/user/animation.md` (standing resolution, owned by this branch)
 
@@ -156,6 +156,34 @@ Auto-merged and worth reading rather than assuming: `cancelFadeAnimation` gains 
 
 Falsification is two-sided, because either side of this union is load-bearing: drop `fadeEvent()` (take ours) and `animation/scratchpad_restore_fade` fails on its transparent start; drop the minimize branch (take theirs) and `animation/floating_minimize` fails. Owner: `feat/scratchpad-restore-fade`, fresh against upstream, so no report exists.
 
+### C11 — 20 × 15, `src/workspace/scratchpad.cpp`, `refreshOutputGeometry` and `syncPads` (standing resolution, owned by this branch)
+
+Row 20's second commit routes "the pointer owns this view" through one predicate, `isCarried()`, which is `Cursor::isDraggingView()` behind a null check. Row 15 (`feat/resize-physics`) had taught the same two predicates to spare a **resize grab** as well, through `cursor->isResizingView()`. Neither branch ever had the other's condition, so this is a union of two accepted changes and not a disagreement about which one is right: a dragged view must not be reparented, and a resizing view must not have its box remapped underneath the grab.
+
+- `refreshOutputGeometry` — union, and restore the `Cursor* cursor` local the incoming commit deleted, because the resize half needs it:
+
+```cpp
+        if (entry.scratchpad != name || entry.view == nullptr || isCarried(entry.view)
+            || (cursor != nullptr && cursor->isResizingView(entry.view))) {
+```
+
+- `syncPads`, when a pad definition is removed — take our structure (which is the branch's plus the resize condition; both need the cursor to call `resetMode()`):
+
+```cpp
+      if (Cursor* cursor = m_server->cursor(); cursor != nullptr) {
+        const bool removesGrabbedView = std::ranges::any_of(views, [&](const View* view) {
+          return isCarried(view) || cursor->isResizingView(view);
+        });
+        if (removesGrabbedView) {
+          cursor->resetMode();
+        }
+      }
+```
+
+Do **not** widen `isCarried()` to cover resizing: it is also the admission and restore guard, where a resize grab is handled by cancelling the grab rather than by refusing the operation, which is the accepted row-15 policy.
+
+Falsification, honestly reported: the drag half is pinned by row 20's own `scratchpad/drag_pad_actions`, but **both resize halves are unobserved**. Dropping the hunk-1 clause leaves all 28 of `scratchpad/` green, and so does dropping the hunk-2 clause; only `-Werror` notices the orphaned `cursor` local. A usable-area change or a pad-definition reload during a resize grab is not covered anywhere. The follow-up belongs on `feat/resize-physics`: drive either case from a harness check. Owner: `feat/scratchpad-drop-adopt` for the drag half, `feat/resize-physics` for the resize half; both are fresh against upstream, so no report exists.
+
 ## Rules
 
 - Fork-only. Never pushed upstream, never proposed.
@@ -166,5 +194,5 @@ Falsification is two-sided, because either side of this union is load-bearing: d
 - A force-pushed member costs nothing: that is what the rebuild lifecycle is for.
 - `Owner` names the thread that maintains the branch, not a person. The standing ownership contract — surface, gate, conflict shape, decision log — is `docs/branch-ownership.md`, committed beside this file by the same bookkeeping commit, because a rebuild starts from `upstream/main` and neither file exists there.
 - A member that lands upstream is deleted from this table outright; do not keep its row as history.
-- A row stacked on another must follow it: row 20 is cut on row 18, so merging it after row 18 keeps its merge base inside this branch and only the C10 files can collide.
+- A row stacked on another must follow it: row 20 is cut on row 18, so merging it after row 18 keeps its merge base inside this branch and only the C10 and C11 hunks can collide.
 - A collision is judged against `upstream/main`, not against this branch. Merge the member into `upstream/main` with `git merge-tree --write-tree`; a clean result makes the branch fresh and the collision here ours to union, and a colliding result makes it stale and sends the fix to its owner.
