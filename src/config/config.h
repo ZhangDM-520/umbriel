@@ -343,6 +343,9 @@ namespace umbriel {
     std::optional<OutputMode> mode;
     std::optional<std::array<int, 2>> position;
     std::optional<double> scale;
+    // Scale clients are asked to render at; the compositor samples the larger
+    // buffers down to the `scale` raster. Unset follows the logical scale.
+    std::optional<double> renderScale;
     std::optional<int> transform;
     VrrMode vrr = VrrMode::Disabled;
     bool focusAtStartup = false;
@@ -504,6 +507,10 @@ namespace umbriel {
     // Overrides the client's tearing-control hint. Omitted follows the hint,
     // true forces async preference, and false vetoes it.
     std::optional<bool> allowTearing;
+    // Overrides whether the window renders at its output's render_scale.
+    // Omitted supersamples everything except fullscreen windows and windows
+    // whose content type is game or video; true and false decide outright.
+    std::optional<bool> supersample;
     std::optional<HdrMode> hdr;
     std::optional<double> dimBehind;
     std::optional<double> opacity; // 0.0-1.0
@@ -573,6 +580,7 @@ namespace umbriel {
           && allowShortcutsInhibit == other.allowShortcutsInhibit
           && backgroundRender == other.backgroundRender
           && blockCapture == other.blockCapture
+          && supersample == other.supersample
           && vrr == other.vrr
           && allowTearing == other.allowTearing
           && hdr == other.hdr
@@ -627,6 +635,7 @@ namespace umbriel {
     std::optional<bool> blockCapture;
     std::optional<VrrMode> vrr;
     std::optional<bool> allowTearing;
+    std::optional<bool> supersample;
     std::optional<HdrMode> hdr;
     std::optional<double> dimBehind;
     std::optional<double> opacity;
@@ -666,6 +675,9 @@ namespace umbriel {
     std::optional<double> dimBehind;
     std::optional<double> ignoreAlpha;
     std::optional<bool> optimized;
+    // Render at the output's render_scale (true) or at its scale (false).
+    // Omitted supersamples every layer surface.
+    std::optional<bool> supersample;
 
     // See WindowRule: the regexes are derived from the patterns.
     bool operator==(const LayerRule& other) const {
@@ -676,7 +688,8 @@ namespace umbriel {
           && blurPopups == other.blurPopups
           && dimBehind == other.dimBehind
           && ignoreAlpha == other.ignoreAlpha
-          && optimized == other.optimized;
+          && optimized == other.optimized
+          && supersample == other.supersample;
     }
   };
 
@@ -686,6 +699,7 @@ namespace umbriel {
     std::optional<double> dimBehind;
     std::optional<double> ignoreAlpha;
     std::optional<bool> optimized;
+    std::optional<bool> supersample;
     bool operator==(const ResolvedLayerRule&) const = default;
   };
 
@@ -1169,6 +1183,8 @@ namespace umbriel {
       // Present outputs to X11 clients at their physical resolution, so they render at native size instead of being
       // upscaled on scaled outputs. Requires restart.
       bool xwaylandNativeResolution = false;
+      // Expose render-scale pixels to native X11 clients instead of physical pixels. Requires restart.
+      bool forceX11Supersample = false;
       // Run an XSETTINGS manager in Xwayland that announces the X screen scale and cursor theme. Requires restart.
       bool xwaylandXsettings = true;
       // Connector or monitor identity to publish as the X11 primary. Empty leaves RandR unmanaged.
