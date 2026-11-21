@@ -416,6 +416,7 @@ namespace umbriel {
     if (m_workspace == workspace) {
       return;
     }
+    cancelResizeGrab();
     if (workspace == nullptr || workspace->layoutMode() != LayoutMode::Stacking) {
       clearRegionState();
     }
@@ -629,6 +630,7 @@ namespace umbriel {
       // the shared drag tree cannot travel or hide with its workspace, so land it
       // before the workspace stops presenting it.
       flushReleaseRehome();
+      cancelResizeGrab();
     }
     // A hidden tab or a minimized window stays hidden when its workspace comes back.
     // A window the drag tree presents belongs to it, not to the workspace it was

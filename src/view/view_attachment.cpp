@@ -124,6 +124,7 @@ namespace umbriel {
   }
 
   void View::attach(View* parent) {
+    cancelResizeGrab();
     const View* focused = fromSurface(m_server->seat()->wlr()->keyboard_state.focused_surface);
     const bool takesInput = focused != nullptr
         && (focused->placementRoot() == parent->placementRoot() || focused->placementRoot() == placementRoot());

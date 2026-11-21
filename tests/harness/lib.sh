@@ -273,6 +273,17 @@ await_window_closed() {
   echo "window still open: $1"; return 1
 }
 
+# settle refuses while an animation runs on the frozen clock, so advance until it relaxes.
+settle_frozen() {
+  for _ in $(seq 25); do
+    "$UMBRIEL" clock-advance 100 > /dev/null
+    if "$UMBRIEL" settle > /dev/null 2>&1; then
+      return 0
+    fi
+  done
+  "$UMBRIEL" settle > /dev/null
+}
+
 # Compare mean RGB with three levels of tolerance for framebuffer rounding.
 assert_region_rgb() {
   local frame=$1 region=$2 er=$3 eg=$4 eb=$5 label=${6:-$1:$2} r g b

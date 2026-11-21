@@ -87,7 +87,7 @@ namespace umbriel {
           return false;
         }
       }
-      return before.windowsDrag == after.windowsDrag;
+      return before.windowsDrag == after.windowsDrag && before.windowsResize.physics == after.windowsResize.physics;
     }
 
     bool selectsEffect(const std::vector<WindowRule>& rules) {

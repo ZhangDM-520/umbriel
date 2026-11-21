@@ -956,6 +956,8 @@ namespace umbriel {
         // While the size does not animate, a reflow that resizes tiles keeps showing their frames, and hides openers,
         // until every resized client has redrawn (or kRedrawWaitMs passes), then lands in one frame.
         bool waitForRedraw = false;
+        // Deform a floating window like an elastic sheet during pointer resizes.
+        bool physics = false;
         bool waitsForClient(bool animationEnabled) const { return waitForRedraw && !(animationEnabled && enabled); }
         bool operator==(const WindowsResize&) const = default;
       } windowsResize;

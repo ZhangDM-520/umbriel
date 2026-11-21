@@ -345,6 +345,9 @@ namespace umbriel {
     if (output == nullptr) {
       return false;
     }
+    if (Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isResizingView(view)) {
+      cursor->resetMode();
+    }
 
     std::optional<Entry> newEntry;
     if (!transferring) {
@@ -718,7 +721,7 @@ namespace umbriel {
       for (Entry& entry : m_entries) {
         if (entry.scratchpad != name
             || entry.view == nullptr
-            || (cursor != nullptr && cursor->isDraggingView(entry.view))) {
+            || (cursor != nullptr && (cursor->isDraggingView(entry.view) || cursor->isResizingView(entry.view)))) {
           continue;
         }
         View* view = entry.view;
@@ -1487,8 +1490,9 @@ namespace umbriel {
         }
       }
       if (Cursor* cursor = m_server->cursor(); cursor != nullptr) {
-        const bool removesGrabbedView =
-            std::ranges::any_of(views, [&](const View* view) { return cursor->isDraggingView(view); });
+        const bool removesGrabbedView = std::ranges::any_of(views, [&](const View* view) {
+          return cursor->isDraggingView(view) || cursor->isResizingView(view);
+        });
         if (removesGrabbedView) {
           cursor->resetMode();
         }
