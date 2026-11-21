@@ -81,6 +81,14 @@ Closing the last member leaves the empty pad open, backdrop and all, and still t
 
 Explicit output, workspace, scratchpad, or enabled pinning rules take priority over the captured scratchpad destination. Unrelated windows without a launch token keep their normal placement. Activating an existing application window does not move it into the scratchpad.
 
+### Dropping a window on an open pad
+
+Drag a window over an open scratchpad on any output and release it there: the window joins that pad, at the point you dropped it. Restoring it later returns it to the workspace the drag started from.
+
+Two drags are declined and stay on their workspace: a lifted tab group, and a pinned window. A declined drop never animates above the pad.
+
+Moving a window into a scratchpad with `window-move-to-scratchpad` uses the pad's output. A pad that is still showing keeps that output even when it is empty, so the window joins it there instead of following the pointer; a hidden pad appears on the pointer's output the next time it is shown.
+
 ### Window rules
 
 Use a `default_scratchpad` window rule:
