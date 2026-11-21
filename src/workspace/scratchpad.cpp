@@ -1050,6 +1050,85 @@ namespace umbriel {
     }
   }
 
+  void ScratchpadManager::beginOverviewDismissal() {
+    m_overviewHidden.clear();
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (scratchpad.visible) {
+        m_overviewHidden.push_back(
+            {.name = name, .solo = scratchpad.solo, .active = scratchpad.active, .lastFocused = scratchpad.lastFocused}
+        );
+      }
+    }
+  }
+
+  void ScratchpadManager::commitOverviewDismissal() { m_overviewHidden.clear(); }
+
+  void ScratchpadManager::restoreOverviewDismissal() {
+    const std::vector<OverviewHidden> hidden = std::move(m_overviewHidden);
+    m_overviewHidden.clear();
+    for (const OverviewHidden& snapshot : hidden) {
+      Scratchpad* scratchpad = findScratchpad(snapshot.name);
+      // A pad hidden by something else in the meantime stays hidden.
+      if (scratchpad == nullptr || scratchpad->visible || scratchpad->output == nullptr) {
+        continue;
+      }
+      // Hiding a pad clears the window it showed alone, its active mark and the window it had focused, so a member
+      // that has since left the pad must not come back as a dangling owner.
+      const auto stillMember = [this, &snapshot](const View* view) {
+        return view != nullptr && std::ranges::any_of(m_entries, [view, &snapshot](const Entry& entry) {
+                 return entry.view == view && entry.scratchpad == snapshot.name;
+               });
+      };
+      scratchpad->solo = stillMember(snapshot.solo) ? snapshot.solo : nullptr;
+      scratchpad->lastFocused = stillMember(snapshot.lastFocused) ? snapshot.lastFocused : nullptr;
+      scratchpad->active = snapshot.active;
+      setVisible(snapshot.name, true, false);
+      if (scratchpad->active) {
+        refocusActive(scratchpad->output);
+      }
+    }
+  }
+
+  bool ScratchpadManager::hasVisiblePad(const Output* output) const { return output != nullptr && visibleOn(output); }
+
+  float ScratchpadManager::backdropFadeOn(const Output* output) const {
+    const auto fade = m_backdropFades.find(const_cast<Output*>(output));
+    return fade != m_backdropFades.end() ? static_cast<float>(fade->second.current()) : 0.0F;
+  }
+
+  std::vector<View*> ScratchpadManager::visibleMembersOn(const Output* output) const {
+    std::vector<View*> members;
+    if (output == nullptr) {
+      return members;
+    }
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (!scratchpad.visible || scratchpad.output != output) {
+        continue;
+      }
+      for (const Entry& entry : m_entries) {
+        if (entry.scratchpad == name && entry.view != nullptr && presents(scratchpad, entry.view)) {
+          members.push_back(entry.view);
+        }
+      }
+    }
+    // The pad tree is what decides which member covers which; admission order says nothing about the stack.
+    const auto stackingOrder = [this](const View* view) {
+      size_t index = 0;
+      wlr_scene_node* child = nullptr;
+      wl_list_for_each(child, &m_root->children, link) {
+        if (child == &view->sceneTree()->node) {
+          return index;
+        }
+        ++index;
+      }
+      return index;
+    };
+    std::ranges::stable_sort(members, [&stackingOrder](const View* left, const View* right) {
+      return stackingOrder(left) < stackingOrder(right);
+    });
+    return members;
+  }
+
   View* ScratchpadManager::focused(std::string_view name) const {
     const Scratchpad* scratchpad = findScratchpad(name);
     if (scratchpad == nullptr || !scratchpad->visible || scratchpad->output == nullptr) {
